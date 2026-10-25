@@ -38,7 +38,7 @@ Works from **any city in the world**. Set your departure airport in one line of 
 🔗 Open ticket
 Cached price: confirm on the site before buying.
 ```
-
+![Telegram Alert Example](screenshot.png)
 ## How it works
 
 ```
