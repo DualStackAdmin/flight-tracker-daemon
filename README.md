@@ -13,8 +13,9 @@ Works from **any city in the world**. Set your departure airport in one line of 
 
 ## Features
 
-- 🔎 **Route watching**: one-way or round trip, stay length (e.g. 4–10 days), direct-only filter.
-- 🌍 **"Anywhere" mode**: finds the cheapest destinations from your city that you didn't even think of.
+- 🔎 **Route watching**: one way, round trip, or **both**, with stay length (e.g. 4–10 days) and a direct-only filter.
+- 🌍 **"Anywhere" mode**: finds the cheapest destinations from your city that you didn't even think of, one way, round trip or both.
+- 📘 **Built-in user guide**: `/start` sends a short, complete how-to in Telegram (also sent once on the very first start).
 - 📉 **Smart alerts**:
   - you get a message when a fare hits your target price, or drops X% below the route's 30-day low;
   - the same deal is never sent twice;
@@ -56,13 +57,18 @@ Cached price: confirm on the site before buying.
 | `/weekend [max_price]` | Friday after 15:00 → Sunday round trips |
 | `/scan` | Run a scan now |
 | `/routes` | Watched routes, limits, passengers, muted list |
-| `/addroute PAR [150] [rt 4-10] [direct]` | Watch a new destination (optional target price, round trip with stay length, direct only) |
+| `/addroute PAR [150] [rt 4-10 \| both 4-10] [direct]` | Watch a new destination (optional target price, round trip or both with stay length, direct only) |
+| `/trip IST both 3-7 [300]` | Switch a city between `oneway`, `round` and `both` (optional stay and round-trip target) |
+| `/trip anywhere both 3-7 [250]` | Same for the worldwide "anywhere" search |
 | `/removeroute PAR` | Stop watching a destination |
 | `/setlimit 150` / `/setlimit IST 150` | Change the "anywhere" target / one route's target |
 | `/family 3` | Show totals for 3 passengers (`/family 1` to reset) |
 | `/mute IST` / `/unmute IST` / `/muted` | Manage the mute list |
 | `/chart IST` | Lowest price per day, last 30 days |
 | `/status` | Service status |
+| `/start` | Full user guide · `/help` short command list |
+
+If no round-trip target is set, it defaults to twice the one-way target.
 
 Changes made from Telegram are stored in the database on top of `config.yaml` and survive restarts.
 
@@ -155,6 +161,8 @@ The bot says **🚀 Flight Tracker started**. Send `/scan` to run a scan right a
 | `routes[].destination` | Destination IATA code |
 | `routes[].max_price` | Alert when the fare is at or below this |
 | `routes[].round_trip`, `min_days`, `max_days` | Round trip and stay length |
+| `routes[].both`, `routes[].rt_max_price` | Search one way and round trip; round-trip target |
+| `anywhere.trip`, `min_days`, `max_days`, `rt_max_price` | Trip type (`ow`/`rt`/`both`) for the worldwide search |
 | `routes[].direct_only` | Only non-stop flights |
 | `anywhere.enabled`, `anywhere.max_price` | Cheapest fares to any destination |
 | `alerts.drop_percent` | Alert when the fare is this % below the 30-day low |

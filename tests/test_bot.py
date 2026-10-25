@@ -493,7 +493,7 @@ async def test_app_live_config_commands(app):
     assert "unmuted" in await h(1, "/unmute IST")
     assert "No price history" in await h(1, "/chart IST")
     routes = await h(1, "/routes")
-    assert "Passengers: 3" in routes and "Anywhere (target ≤ 80)" in routes and "IST" not in routes
+    assert "Passengers: 3" in routes and "Anywhere: one way, target ≤ 80" in routes and "IST" not in routes
 
 
 @pytest.mark.asyncio
@@ -538,3 +538,91 @@ async def test_telegram_buttons_and_callbacks():
                                "message": {"message_id": 8, "chat": {"id": 999}}}, on_cb)
     assert edit.call_count == 1 and answer.call_count == 2
     await tg.aclose()
+
+
+
+# =====================================================================
+# v1.2: trip type (one way / round trip / both) and the /start guide
+# =====================================================================
+from flight_tracker.settings import parse_trip, route_rt_target  # noqa: E402
+
+
+def test_parse_trip_and_addroute_both():
+    assert parse_trip(["ist", "both", "3-7", "300"]) == ("IST", "both", (3, 7), 300.0)
+    assert parse_trip(["anywhere", "round", "4-10"]) == ("ANYWHERE", "rt", (4, 10), None)
+    assert parse_trip(["world", "oneway"]) == ("ANYWHERE", "ow", None, None)
+    for bad in ([], ["IST"], ["IST", "sometimes"], ["PARIS", "both"], ["IST", "both", "7-3"], ["IST", "rt", "x"]):
+        with pytest.raises(ValueError):
+            parse_trip(bad)
+    r = parse_addroute(["IST", "150", "both", "3-7"])
+    assert (r.both, r.round_trip, r.min_days, r.max_days, r.trip) == (True, False, 3, 7, "both")
+    assert route_rt_target(r) == 300                         # default: 2x the one-way target
+
+
+def test_settings_route_and_anywhere_trip():
+    cfg = Config(routes=[Route("IST", max_price=150)], anywhere=Anywhere(enabled=True, max_price=100))
+    s = Settings(cfg, Storage(":memory:"))
+    assert s.anywhere_trip == "ow" and s.anywhere_rt_max_price == 200     # 2x default
+    s.set_anywhere_trip("both", (3, 7), 250)
+    assert (s.anywhere_trip, s.anywhere_stay, s.anywhere_rt_max_price) == ("both", (3, 7), 250)
+    assert s.set_route_trip("IST", "both", (2, 5))
+    r = s.get_route("IST")
+    assert (r.trip, r.min_days, r.max_days, r.max_price) == ("both", 2, 5, 150)  # price kept
+    assert s.set_route_trip("IST", "rt") and s.get_route("IST").trip == "rt"
+    assert not s.set_route_trip("XXX", "both")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scanner_both_for_routes_and_anywhere(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+
+    def responder(request):
+        p = request.url.params
+        dest, rt = p.get("destination"), p.get("one_way") == "false"
+        dep, ret = "2026-12-03T08:00:00+04:00", "2026-12-08T08:00:00+04:00"   # 5-day stay
+        if dest:
+            return httpx.Response(200, json={"success": True, "data": [
+                row(dest, 250 if rt else 120, dep, ret if rt else None)]})
+        if rt:
+            return httpx.Response(200, json={"success": True, "data": [
+                row("TBS", 150, dep, ret), row("EVN", 90, dep, "2026-12-20T08:00:00+04:00")]})  # EVN stay too long
+        return httpx.Response(200, json={"success": True, "data": [row("TBS", 60, dep)]})
+
+    route = respx.get(API).mock(side_effect=responder)
+    cfg = Config(routes=[Route("IST", max_price=150, both=True, min_days=3, max_days=7)],
+                 anywhere=Anywhere(enabled=True, max_price=100, trip="both", min_days=3, max_days=7),
+                 months_ahead=1)
+    st = Storage(":memory:")
+    sent = []
+
+    async def notify(t, buttons=None):
+        sent.append(t)
+
+    api = TravelpayoutsClient("tok")
+    res = await Scanner(cfg, api, st, notify, settings=Settings(cfg, st)).run_once(today=date(2026, 11, 15))
+    await api.aclose()
+    assert set(res.best) == {"BAK-IST-ow", "BAK-IST-rt", "BAK-TBS-any", "BAK-TBS-anyrt"}
+    assert res.best["BAK-IST-rt"].price == 250 and res.best["BAK-TBS-anyrt"].price == 150
+    # IST rt 250 <= 2x150 and TBS anyrt 150 <= 2x100 -> all four alert
+    assert res.alerts == 4 and sum("round trip" in t for t in sent) == 2
+    assert any(c.request.url.params.get("one_way") == "false" and not c.request.url.params.get("destination")
+               for c in route.calls)
+
+
+@pytest.mark.asyncio
+async def test_app_trip_command_and_guide(app):
+    h = app.handle_command
+    guide = await h(1, "/start")
+    assert "Welcome to Flight Tracker" in guide and "BAK" in guide and "/trip anywhere both 3-7" in guide
+    assert len(guide) < 4000 and guide.count("<b>") == guide.count("</b>")
+    assert "/start for the full guide" in await h(1, "/help")
+    out = await h(1, "/trip IST both 3-7")
+    assert "IST: one way + round trip 3–7 days" in out
+    assert "target one way ≤ 200 / round trip ≤ 400" in out
+    out = await h(1, "/trip anywhere both 4-10 250")
+    assert "Anywhere: one way + round trip 4–10 days, target one way ≤ 100 / round trip ≤ 250" in out
+    assert "Add it first" in await h(1, "/trip XXX both")
+    assert "Unknown trip type" in await h(1, "/trip IST sometimes")
+    assert "Watching DXB" in await h(1, "/addroute DXB 300 both 4-8")
+    assert "DXB: one way + round trip 4–8 days" in await h(1, "/routes")

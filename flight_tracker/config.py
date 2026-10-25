@@ -16,17 +16,27 @@ class Route:
     min_days: int = 3                   # min stay for round trips
     max_days: int = 14
     direct_only: bool = False
+    both: bool = False                  # search one way AND round trip
+    rt_max_price: float | None = None   # target for the round-trip part when both=True
 
     @property
     def kind(self) -> str:
         return "rt" if self.round_trip else "ow"
 
+    @property
+    def trip(self) -> str:
+        return "both" if self.both else self.kind
+
 
 @dataclass
 class Anywhere:
     enabled: bool = False
-    max_price: float | None = None
+    max_price: float | None = None      # target for one-way fares
     limit: int = 30
+    trip: str = "ow"                    # ow | rt | both
+    min_days: int = 3                   # stay length for round trips
+    max_days: int = 14
+    rt_max_price: float | None = None   # target for round-trip fares
 
 
 @dataclass
@@ -92,6 +102,8 @@ def load_config(config_path: str | Path = "config.yaml", env_path: str | Path = 
             min_days=int(r.get("min_days", 3)),
             max_days=int(r.get("max_days", 14)),
             direct_only=bool(r.get("direct_only", False)),
+            both=bool(r.get("both", False)),
+            rt_max_price=r.get("rt_max_price"),
         ))
 
     cfg = Config(

@@ -22,6 +22,12 @@ routes:
     min_days: 4
     max_days: 10
     max_price: 450
+  - destination: AYT     # Antalya: one way AND round trip (3-7 days)
+    both: true
+    min_days: 3
+    max_days: 7
+    max_price: 120       # one-way target
+    rt_max_price: 220    # round-trip target (default: 2x max_price)
   - destination: MOW     # Moscow, direct flights only
     direct_only: true
     max_price: 250
@@ -29,8 +35,12 @@ routes:
 # Cheapest fares from origin to ANY destination (in addition to the routes above)
 anywhere:
   enabled: true
-  max_price: 100
+  max_price: 100         # one-way target
   limit: 30
+  trip: ow               # ow (one way) | rt (round trip) | both
+  min_days: 3            # stay length for round trips
+  max_days: 7
+  # rt_max_price: 200    # round-trip target (default: 2x max_price)
 
 alerts:
   drop_percent: 15       # also alert when a fare is 15% below the route's 30-day low

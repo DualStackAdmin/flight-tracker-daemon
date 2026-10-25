@@ -165,7 +165,7 @@ def format_chart(route_key: str, rows, locations: Locations | None = None, width
     origin, dest, kind = (route_key.split("-") + ["", "", ""])[:3]
     name = (f"{locations.short(origin)} → {locations.short(dest)}" if locations
             else f"{origin} → {dest}")
-    kind_txt = {"rt": "round trip", "ow": "one way", "any": "one way"}.get(kind, kind)
+    kind_txt = {"rt": "round trip", "ow": "one way", "any": "one way", "anyrt": "round trip"}.get(kind, kind)
     if not rows:
         return f"📊 <b>{html.escape(name)}</b>\nNo price history yet."
     prices = [r["price"] for r in rows]

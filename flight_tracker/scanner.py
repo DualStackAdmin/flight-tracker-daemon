@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 from .alerts import decide, format_offer, is_weekend_trip, offer_buttons
@@ -66,6 +66,67 @@ class Scanner:
     def _passengers(self) -> int:
         return self.settings.passengers if self.settings else max(1, self.cfg.passengers)
 
+    def _anywhere_trip(self) -> str:
+        return self.settings.anywhere_trip if self.settings else (self.cfg.anywhere.trip or "ow")
+
+    def _anywhere_stay(self) -> tuple[int, int]:
+        if self.settings:
+            return self.settings.anywhere_stay
+        return self.cfg.anywhere.min_days, self.cfg.anywhere.max_days
+
+    def _anywhere_rt_max(self) -> float | None:
+        if self.settings:
+            return self.settings.anywhere_rt_max_price
+        if self.cfg.anywhere.rt_max_price is not None:
+            return self.cfg.anywhere.rt_max_price
+        return self.cfg.anywhere.max_price * 2 if self.cfg.anywhere.max_price else None
+
+    @staticmethod
+    def _expand(routes: list[Route]) -> list[Route]:
+        """A route with both=True is scanned twice: one way and round trip."""
+        out: list[Route] = []
+        for r in routes:
+            if r.both:
+                out.append(replace(r, round_trip=False, both=False))
+                rt_max = r.rt_max_price if r.rt_max_price is not None else (
+                    r.max_price * 2 if r.max_price else None)       # default: 2x the one-way target
+                out.append(replace(r, round_trip=True, both=False, max_price=rt_max))
+            else:
+                out.append(r)
+        return out
+
+    async def _scan_anywhere(self, months: list[date], today: date, skip: set[str], *,
+                             round_trip: bool, res: ScanResult, now: float) -> None:
+        """Cheapest fare per destination from origin to anywhere (one way or round trip)."""
+        lo, hi = self._anywhere_stay()
+        label = "anywhere round trip" if round_trip else "anywhere"
+        by_dest: dict[str, Offer] = {}
+        for m in months:
+            try:
+                if round_trip:
+                    offers = await self.api.round_trips_anywhere(self.cfg.origin, m)
+                else:
+                    offers = await self.api.cheapest_anywhere(
+                        self.cfg.origin, m, limit=self.cfg.anywhere.limit)
+            except ApiError as e:
+                res.errors.append(f"{label} {m:%Y-%m}: {e}")
+                continue
+            await asyncio.sleep(self.pause)
+            for o in offers:
+                if o.destination in skip:
+                    continue
+                if datetime.fromisoformat(o.departure_at).date() < today:
+                    continue
+                if round_trip and (o.stay_days is None or not lo <= o.stay_days <= hi):
+                    continue
+                if o.destination not in by_dest or o.price < by_dest[o.destination].price:
+                    by_dest[o.destination] = o
+        kind = "anyrt" if round_trip else "any"
+        limit = self._anywhere_rt_max() if round_trip else self._anywhere_max()
+        for dest, o in by_dest.items():
+            res.checked += 1
+            await self._handle(f"{self.cfg.origin}-{dest}-{kind}", o, limit, res, now)
+
     async def _route_offers(self, route: Route, months: list[date], today: date) -> list[Offer]:
         offers: list[Offer] = []
         for m in months:
@@ -115,7 +176,7 @@ class Scanner:
 
             routes = self._routes()
             muted = self._muted()
-            for route in routes:
+            for route in self._expand(routes):
                 key = f"{self.cfg.origin}-{route.destination}-{route.kind}"
                 try:
                     offers = await self._route_offers(route, months, today)
@@ -132,26 +193,11 @@ class Scanner:
 
             if self.cfg.anywhere.enabled:
                 explicit = {r.destination for r in routes} | muted
-                by_dest: dict[str, Offer] = {}
-                for m in months:
-                    try:
-                        offers = await self.api.cheapest_anywhere(
-                            self.cfg.origin, m, limit=self.cfg.anywhere.limit)
-                    except ApiError as e:
-                        res.errors.append(f"anywhere {m:%Y-%m}: {e}")
-                        continue
-                    await asyncio.sleep(self.pause)
-                    for o in offers:
-                        if o.destination in explicit:
-                            continue
-                        if datetime.fromisoformat(o.departure_at).date() < today:
-                            continue
-                        if o.destination not in by_dest or o.price < by_dest[o.destination].price:
-                            by_dest[o.destination] = o
-                for dest, o in by_dest.items():
-                    res.checked += 1
-                    await self._handle(f"{self.cfg.origin}-{dest}-any", o,
-                                       self._anywhere_max(), res, now)
+                trip = self._anywhere_trip()
+                if trip in ("ow", "both"):
+                    await self._scan_anywhere(months, today, explicit, round_trip=False, res=res, now=now)
+                if trip in ("rt", "both"):
+                    await self._scan_anywhere(months, today, explicit, round_trip=True, res=res, now=now)
 
             self.last_run = now
             self.last_result = res

@@ -17,20 +17,63 @@ from .alerts import (airline_name, alert_buttons, format_chart, format_weekend, 
 from .config import Config, load_config
 from .locations import Locations
 from .scanner import Scanner
-from .settings import Settings, parse_addroute, valid_code
+from .settings import (Settings, describe_trip, parse_addroute, parse_trip,
+                       route_rt_target, valid_code)
 from .storage import Storage
 from .telegram import Telegram
 from .travelpayouts import TravelpayoutsClient
 
 log = logging.getLogger("flight_tracker")
 
+GUIDE = """👋 <b>Welcome to Flight Tracker</b>
+I watch flight prices from <b>{origin}</b> 24/7 and message you when a fare is cheap.
+
+<b>When you get an alert</b>
+• the fare is at or below your target price, or
+• it is {drop:g}% below the lowest price of the last 30 days.
+The same deal is never sent twice.
+
+<b>Buttons under each alert</b>
+✈️ Open ticket: see and book it on the website
+🔕 Mute: no more alerts for that city (tap 🔔 to undo)
+📊 Price chart: lowest price per day, last 30 days
+
+<b>Look things up</b>
+/top: cheapest fares right now
+/weekend [150]: Friday evening → Sunday trips
+/chart IST: price history of a city
+/routes: what I watch and your settings
+
+<b>Change what I watch</b> (saved on the server, no restart)
+/addroute PAR 150: watch Paris, alert at 150 or less
+/addroute DXB 400 rt 4-10: round trip, 4–10 day stay
+/addroute IST 150 both 3-7: one way AND round trip
+/trip IST both 3-7: change the trip type of a city
+/trip anywhere both 3-7: same for the worldwide search
+/setlimit IST 120: new target for one city
+/setlimit 100: new target for the worldwide search
+/removeroute PAR · /mute IST · /unmute IST · /muted
+
+<b>Your trip</b>
+/family 2: also show the total for 2 passengers
+
+<b>Service</b>
+/scan: scan now · /status: health · /help: short list
+
+<b>Good to know</b>
+• Use city codes: PAR, LON, IST, DXB, TBS, NYC...
+• Prices are per adult, in {currency}, from searches made in the last 48 hours. Always check the price on the site before buying.
+• If a round-trip target is not set, it is twice the one-way target.
+• 🎒/🧳 is a baggage hint based on the airline, not a guarantee."""
+
 HELP = (
-    "<b>Flight Tracker</b>\n"
+    "<b>Flight Tracker</b> (/start for the full guide)\n"
     "/top: cheapest prices from the last 48 hours\n"
     "/weekend [max_price]: Friday evening → Sunday getaways\n"
     "/scan: scan now\n"
     "/routes: watched routes and settings\n"
-    "/addroute PAR [150] [rt 4-10] [direct]: watch a new destination\n"
+    "/addroute PAR [150] [rt 4-10 | both 4-10] [direct]: watch a new destination\n"
+    "/trip IST|anywhere oneway|round|both [3-7] [price]: trip type\n"
     "/removeroute PAR: stop watching a destination\n"
     "/setlimit 150 or /setlimit IST 150: change a target price\n"
     "/family 3: show total prices for 3 passengers\n"
@@ -45,9 +88,11 @@ COMMANDS = [
     ("scan", "Scan now"), ("routes", "Watched routes and settings"),
     ("addroute", "Watch a destination: /addroute PAR 150"),
     ("removeroute", "Stop watching: /removeroute PAR"),
+    ("trip", "One way / round / both: /trip IST both 3-7"),
     ("setlimit", "Target price: /setlimit IST 150"), ("family", "Passengers: /family 3"),
     ("mute", "Mute a destination"), ("unmute", "Unmute a destination"), ("muted", "Muted list"),
-    ("chart", "Price history: /chart IST"), ("status", "Service status"), ("help", "Help"),
+    ("chart", "Price history: /chart IST"), ("status", "Service status"), ("help", "Short command list"),
+    ("start", "Full user guide"),
 ]
 
 
@@ -84,6 +129,15 @@ def _price(arg: str) -> float:
     return v
 
 
+def _targets(trip: str, ow_price: float | None, rt_price: float | None) -> str:
+    parts = []
+    if trip in ("ow", "both") and ow_price:
+        parts.append(f"one way ≤ {ow_price:g}" if trip == "both" else f"≤ {ow_price:g}")
+    if trip in ("rt", "both") and rt_price:
+        parts.append(f"round trip ≤ {rt_price:g}" if trip == "both" else f"≤ {rt_price:g}")
+    return f", target {' / '.join(parts)}" if parts else ""
+
+
 class App:
     def __init__(self, cfg: Config, dry_run: bool = False):
         self.cfg = cfg
@@ -108,7 +162,7 @@ class App:
 
     def _route_key_for(self, dest: str) -> str | None:
         """Find the route key with history for a destination (for /chart IST)."""
-        for kind in ("ow", "rt", "any"):
+        for kind in ("ow", "rt", "any", "anyrt"):
             key = f"{self.cfg.origin}-{dest}-{kind}"
             if self.storage.daily_min(key, days=30):
                 return key
@@ -120,14 +174,17 @@ class App:
                  f"every {self.cfg.scan_interval_minutes} min"]
         muted = s.muted()
         for r in s.routes():
-            extra = f"round trip {r.min_days}–{r.max_days} days" if r.round_trip else "one way"
-            lim = f", target ≤ {r.max_price:g}" if r.max_price else ""
+            extra = describe_trip(r.trip, r.min_days, r.max_days)
+            lim = _targets(r.trip, r.max_price, route_rt_target(r))
             mute = " 🔕" if r.destination in muted else ""
             lines.append(f"• {r.destination}: {extra}{lim}{', direct only' if r.direct_only else ''}{mute}")
         if self.cfg.anywhere.enabled:
-            amax = s.anywhere_max_price
-            lim = f" (target ≤ {amax:g})" if amax else ""
-            lines.append(f"• Anywhere{lim}")
+            lo, hi = s.anywhere_stay
+            trip = s.anywhere_trip
+            lim = _targets(trip, s.anywhere_max_price, s.anywhere_rt_max_price)
+            lines.append(f"• Anywhere: {describe_trip(trip, lo, hi)}{lim}")
+        else:
+            lines.append("• Anywhere: off (anywhere.enabled in config.yaml)")
         lines.append(f"Passengers: {s.passengers}")
         if muted:
             lines.append("Muted: " + ", ".join(sorted(muted)))
@@ -139,7 +196,9 @@ class App:
         args = parts[1:]
         s = self.settings
         try:
-            if cmd in ("/start", "/help"):
+            if cmd == "/start":
+                return self.guide()
+            if cmd == "/help":
                 return HELP
             if cmd == "/top":
                 return format_top(self.storage, locations=self.locations, passengers=s.passengers)
@@ -156,6 +215,18 @@ class App:
                 route = parse_addroute(args)
                 s.add_route(route)
                 return f"✅ Watching {route.destination}. It will be checked on the next scan (/scan to run now).\n\n" + self._routes_text()
+            if cmd == "/trip":
+                target, mode, stay, price = parse_trip(args)
+                if target == "ANYWHERE":
+                    s.set_anywhere_trip(mode, stay, price)
+                    note = "" if self.cfg.anywhere.enabled else \
+                        "\n⚠️ The worldwide search is off: set anywhere.enabled: true in config.yaml."
+                    return f"✅ Worldwide search: {describe_trip(mode, *s.anywhere_stay)}.{note}\n\n" \
+                        + self._routes_text()
+                if not s.set_route_trip(target, mode, stay, price):
+                    return (f"{target} is not in your routes. Add it first, e.g. "
+                            f"/addroute {target} 150 {'both 3-7' if mode == 'both' else 'rt 3-7' if mode == 'rt' else ''}".rstrip())
+                return f"✅ {target}: {describe_trip(mode, *self._stay(target))}.\n\n" + self._routes_text()
             if cmd == "/removeroute":
                 if not args:
                     return "Usage: /removeroute PAR"
@@ -218,6 +289,15 @@ class App:
             return f"⚠️ {e}"
         return "Unknown command. /help"
 
+    def guide(self) -> str:
+        return GUIDE.format(origin=html.escape(self.cfg.origin),
+                            currency=html.escape(self.cfg.currency.upper()),
+                            drop=self.cfg.alerts.drop_percent)
+
+    def _stay(self, dest: str) -> tuple[int, int]:
+        r = self.settings.get_route(dest)
+        return (r.min_days, r.max_days) if r else (3, 14)
+
     async def handle_callback(self, chat_id: int, data: str, message: dict):
         """Inline button presses. Returns (toast, reply_text, new_buttons)."""
         action, _, value = data.partition(":")
@@ -277,7 +357,11 @@ class App:
             loop.add_signal_handler(sig, self.stop.set)
         if self.tg:
             await self.tg.set_commands(COMMANDS)
-            await self.tg.send("🚀 Flight Tracker started. /help")
+            if self.storage.get_meta("guide_sent"):
+                await self.tg.send("🚀 Flight Tracker started. /help")
+            else:  # very first start: send the full user guide once
+                await self.tg.send("🚀 Flight Tracker started.\n\n" + self.guide())
+                self.storage.set_meta("guide_sent", "1")
         tasks = [asyncio.create_task(self.scan_loop())]
         if self.tg:
             tasks.append(asyncio.create_task(self.tg.poll(self.handle_command, self.stop, self.handle_callback)))
