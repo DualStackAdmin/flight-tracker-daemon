@@ -1,0 +1,27 @@
+[Unit]
+Description=Flight Tracker Daemon - cheap flight alerts on Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/venv/bin/python -m flight_tracker
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+# Hardening: the service can only write to data/
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__APP_DIR__/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

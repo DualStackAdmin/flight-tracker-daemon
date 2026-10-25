@@ -1,0 +1,36 @@
+# Flight Tracker Daemon settings.  cp config.example.yaml config.yaml
+# After changing: sudo systemctl restart flight-tracker
+
+origin: BAK              # YOUR departure city IATA code: BAK (Baku), IST, LON, NYC, BER ...
+currency: usd            # usd, eur, try, ...
+# market: az             # data source market (auto when omitted)
+months_ahead: 3          # how many months ahead to search (current month included)
+scan_interval_minutes: 60  # API data is cached for 48h; 30-60 min is plenty
+digest_hour: 9           # daily summary at 09:00 local time; set to null to disable
+timezone: Asia/Baku       # your local timezone (e.g. Europe/Istanbul, Europe/London)
+db_path: data/prices.db
+
+# Specific destinations (IATA codes: IST, DXB, TBS, LON, PAR, ...)
+routes:
+  - destination: IST     # Istanbul (IST + SAW)
+    max_price: 200       # alert when a fare is at or below this price
+  - destination: TBS     # Tbilisi
+    max_price: 120
+  - destination: DXB     # Dubai, round trip, 4-10 day stay
+    round_trip: true
+    min_days: 4
+    max_days: 10
+    max_price: 450
+  - destination: MOW     # Moscow, direct flights only
+    direct_only: true
+    max_price: 250
+
+# Cheapest fares from origin to ANY destination (in addition to the routes above)
+anywhere:
+  enabled: true
+  max_price: 100
+  limit: 30
+
+alerts:
+  drop_percent: 15       # also alert when a fare is 15% below the route's 30-day low
+  cooldown_hours: 12     # max one alert per route per 12h (unless the price drops further)
