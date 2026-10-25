@@ -94,6 +94,8 @@ HELP = (
     "/help: this message"
 )
 
+GUIDE_BUTTON = [[{"text": "📘 Guide", "callback_data": "guide"}]]
+
 COMMANDS = [
     ("top", "Cheapest prices (48h)"), ("weekend", "Fri evening to Sun getaways"),
     ("scan", "Scan now"), ("routes", "Watched routes and settings"),
@@ -360,6 +362,8 @@ class App:
         if action == "unmute" and valid_code(value):
             self.settings.unmute(value)
             return f"🔔 {value} unmuted", None, alert_buttons(link, value, route_key)
+        if action == "guide":
+            return "📘", self.guide(), None
         if action == "chart" and value:
             return "📊", format_chart(value, self.storage.daily_min(value), self.locations), None
         return "Unknown button", None, None
@@ -407,7 +411,7 @@ class App:
         if self.tg:
             await self.tg.set_commands(COMMANDS)
             if self.storage.get_meta("guide_sent"):
-                await self.tg.send("🚀 Flight Tracker started. /help")
+                await self.tg.send("🚀 Flight Tracker started. /help", buttons=GUIDE_BUTTON)
             else:  # very first start: send the full user guide once
                 await self.tg.send("🚀 Flight Tracker started.\n\n" + self.guide())
                 self.storage.set_meta("guide_sent", "1")

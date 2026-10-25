@@ -789,3 +789,9 @@ async def test_app_alt_and_holidays_commands(app):
     assert "Upcoming public holidays" in out
     guide = await h(1, "/start")
     assert len(guide) < 4000 and "/alt TBS KUT" in guide and "🟢 visa-free" in guide
+
+
+@pytest.mark.asyncio
+async def test_app_guide_button(app):
+    toast, reply, kb = await app.handle_callback(1, "guide", {})
+    assert toast == "📘" and "Welcome to Flight Tracker" in reply and kb is None
