@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 from typing import Awaitable, Callable
 
 import httpx
@@ -10,6 +12,32 @@ import httpx
 log = logging.getLogger(__name__)
 
 Handler = Callable[[int, str], Awaitable[str | None]]
+
+MAX_LEN = 4000  # Telegram limit is 4096; keep a margin
+
+
+def html_to_text(text: str) -> str:
+    """Strip HTML tags and unescape entities (plain-text fallback)."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+def split_message(text: str, limit: int = MAX_LEN) -> list[str]:
+    """Split a long message into chunks at line breaks, so an HTML tag is never cut in half.
+    A single line longer than the limit is sent as plain text, cut safely."""
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        if len(line) > limit:
+            line = html.escape(html_to_text(line))[:limit]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks or [""]
 
 
 class Telegram:
@@ -27,22 +55,32 @@ class Telegram:
     async def send(self, text: str, chat_id: int | None = None) -> None:
         targets = [chat_id] if chat_id is not None else self.chat_ids
         for cid in targets:
-            for attempt in range(3):
-                try:
-                    r = await self._client.post("/sendMessage", json={
-                        "chat_id": cid, "text": text[:4096], "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    })
-                    if r.status_code == 429:
-                        wait = r.json().get("parameters", {}).get("retry_after", 5)
-                        await asyncio.sleep(wait)
-                        continue
-                    if r.status_code != 200:
-                        log.error("Telegram error %s: %s", r.status_code, r.text[:300])
-                    break
-                except httpx.HTTPError as e:
-                    log.warning("Telegram network error: %s", e)
-                    await asyncio.sleep(2 ** attempt)
+            for chunk in split_message(text):
+                await self._send_one(cid, chunk)
+
+    async def _send_one(self, cid: int, text: str, html_mode: bool = True) -> None:
+        payload = {"chat_id": cid, "text": text, "disable_web_page_preview": True}
+        if html_mode:
+            payload["parse_mode"] = "HTML"
+        for attempt in range(3):
+            try:
+                r = await self._client.post("/sendMessage", json=payload)
+            except httpx.HTTPError as e:
+                log.warning("Telegram network error: %s", e)
+                await asyncio.sleep(2 ** attempt)
+                continue
+            if r.status_code == 429:
+                wait = r.json().get("parameters", {}).get("retry_after", 5)
+                await asyncio.sleep(wait)
+                continue
+            if r.status_code == 400 and html_mode and "parse entities" in r.text:
+                # Safety net: never lose a message because of markup, send it as plain text
+                log.warning("Telegram rejected HTML, resending as plain text: %s", r.text[:200])
+                await self._send_one(cid, html_to_text(text), html_mode=False)
+                return
+            if r.status_code != 200:
+                log.error("Telegram error %s: %s", r.status_code, r.text[:300])
+            return
 
     async def poll(self, handler: Handler, stop: asyncio.Event) -> None:
         """Listen for commands. Only chats listed in TELEGRAM_CHAT_ID get answers,

@@ -255,3 +255,64 @@ async def test_client_reads_airport_codes():
     o = (await c.cheapest_for_month("BAK", "IST", date(2026, 12, 1)))[0]
     await c.aclose()
     assert (o.origin_airport, o.destination_airport) == ("GYD", "SAW")
+
+
+# ---------- Telegram long messages (bug: "can't parse entities: Unclosed start tag") ----------
+from flight_tracker.telegram import Telegram, html_to_text, split_message  # noqa: E402
+
+TG = "https://api.telegram.org/botTOKEN/sendMessage"
+
+
+def long_top_message(lines=15):
+    link = "https://www.aviasales.com/search/BAK1012IST1?t=" + "x" * 400 + "&amp;marker=1"
+    rows = [f'• Baku 🇦🇿 → City{i}: <b>{100 + i} USD</b> · 2026-12-10 · Pegasus (PC) · direct '
+            f'<a href="{link}">↗</a>' for i in range(lines)]
+    return "<b>🏆 Cheapest (last 48 hours)</b>\n" + "\n".join(rows)
+
+
+def test_split_message_never_cuts_tags():
+    text = long_top_message()
+    assert len(text) > 4096                     # the real-world case that failed
+    chunks = split_message(text)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert len(c) <= 4000
+        assert c.count("<a ") == c.count("</a>") and c.count("<b>") == c.count("</b>")
+    assert "\n".join(chunks) == text            # nothing lost
+
+
+def test_split_message_short_and_huge_line():
+    assert split_message("hi") == ["hi"]
+    huge = "<b>" + "y" * 9000 + "</b>"
+    (chunk,) = split_message(huge)
+    assert len(chunk) <= 4000 and "<b>" not in chunk
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_telegram_sends_long_message_in_parts():
+    route = respx.post(TG).mock(return_value=httpx.Response(200, json={"ok": True}))
+    tg = Telegram("TOKEN", [42])
+    await tg.send(long_top_message())
+    await tg.aclose()
+    assert route.call_count >= 2
+    import json as _json
+    for call in route.calls:
+        body = _json.loads(call.request.content)
+        assert body["parse_mode"] == "HTML" and len(body["text"]) <= 4000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_telegram_falls_back_to_plain_text(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    route = respx.post(TG).mock(side_effect=[
+        httpx.Response(400, json={"ok": False, "description": "Bad Request: can't parse entities: x"}),
+        httpx.Response(200, json={"ok": True})])
+    tg = Telegram("TOKEN", [42])
+    await tg.send("<b>broken <i>markup</b> &amp; text")
+    await tg.aclose()
+    import json as _json
+    second = _json.loads(route.calls[1].request.content)
+    assert "parse_mode" not in second and second["text"] == "broken markup & text"
+    assert html_to_text("<a href='x'>↗</a>") == "↗"
