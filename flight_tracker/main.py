@@ -9,10 +9,12 @@ import random
 import signal
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .alerts import airline_name, stops
 from .config import Config, load_config
+from .locations import Locations
 from .scanner import Scanner
 from .storage import Storage
 from .telegram import Telegram
@@ -30,7 +32,7 @@ HELP = (
 )
 
 
-def format_top(storage: Storage, limit: int = 15) -> str:
+def format_top(storage: Storage, limit: int = 15, locations: Locations | None = None) -> str:
     rows = storage.latest_per_route(since_hours=48)[:limit]
     if not rows:
         return "No data yet. Send /scan."
@@ -39,6 +41,9 @@ def format_top(storage: Storage, limit: int = 15) -> str:
         dep = r["departure_at"][:10] if r["departure_at"] else ""
         ret = f"–{r['return_at'][:10]}" if r["return_at"] else ""
         route = r["route_key"].rsplit("-", 1)[0].replace("-", "→")
+        if locations:
+            o, d = r["route_key"].split("-")[:2]
+            route = html.escape(f"{locations.short(o)} → {locations.short(d)}")
         link = f' <a href="{html.escape(r["link"], quote=True)}">↗</a>' if r["link"] else ""
         lines.append(f"• {route}: <b>{r['price']:g} {r['currency']}</b> · {dep}{ret} · "
                      f"{airline_name(r['airline'])} · {stops(r['transfers'])}{link}")
@@ -53,7 +58,9 @@ class App:
         self.api = TravelpayoutsClient(cfg.travelpayouts_token, cfg.currency, cfg.market,
                                        cfg.travelpayouts_marker)
         self.tg = None if dry_run else Telegram(cfg.telegram_token, cfg.telegram_chat_ids)
-        self.scanner = Scanner(cfg, self.api, self.storage, self.notify)
+        self.locations = Locations(Path(cfg.db_path).parent / "locations.json")
+        self.scanner = Scanner(cfg, self.api, self.storage, self.notify,
+                               locations=self.locations)
         self.stop = asyncio.Event()
         self.started = time.time()
 
@@ -68,7 +75,7 @@ class App:
         if cmd in ("/start", "/help"):
             return HELP
         if cmd == "/top":
-            return format_top(self.storage)
+            return format_top(self.storage, locations=self.locations)
         if cmd == "/scan":
             asyncio.create_task(self._scan_and_report(chat_id))
             return "🔎 Scan started..."
@@ -101,7 +108,7 @@ class App:
         msg = f"Scan finished: {res.checked} routes, {res.alerts} new alerts."
         if res.errors:
             msg += f"\n⚠️ {len(res.errors)} errors (/status)"
-        await self.tg.send(msg + "\n\n" + format_top(self.storage, 10), chat_id)
+        await self.tg.send(msg + "\n\n" + format_top(self.storage, 10, self.locations), chat_id)
 
     async def maybe_digest(self) -> None:
         if self.cfg.digest_hour is None:
@@ -110,7 +117,7 @@ class App:
         today = now.strftime("%Y-%m-%d")
         if now.hour >= int(self.cfg.digest_hour) and self.storage.get_meta("last_digest") != today:
             self.storage.set_meta("last_digest", today)
-            await self.notify("☀️ <b>Daily digest</b>\n\n" + format_top(self.storage, 10))
+            await self.notify("☀️ <b>Daily digest</b>\n\n" + format_top(self.storage, 10, self.locations))
 
     async def scan_loop(self) -> None:
         while not self.stop.is_set():
@@ -173,7 +180,7 @@ def main() -> None:
     async def once():
         try:
             await app.scanner.run_once()
-            print(format_top(app.storage))
+            print(format_top(app.storage, locations=app.locations))
         finally:
             await app.close()
 

@@ -39,11 +39,12 @@ class ScanResult:
 
 class Scanner:
     def __init__(self, cfg: Config, api: TravelpayoutsClient, storage: Storage,
-                 notify, request_pause: float = 0.5):
+                 notify, request_pause: float = 0.5, locations=None):
         self.cfg = cfg
         self.api = api
         self.storage = storage
         self.notify = notify            # async def notify(text: str)
+        self.locations = locations      # optional Locations for city/country names
         self.pause = request_pause
         self._lock = asyncio.Lock()
         self.last_run: float | None = None
@@ -81,13 +82,15 @@ class Scanner:
         self.storage.record(route_key, offer, now=now)
         res.best[route_key] = offer
         if d.send:
-            await self.notify(format_offer(offer, d.reasons))
+            await self.notify(format_offer(offer, d.reasons, self.locations))
             self.storage.mark_alert(route_key, offer, now=now)
             res.alerts += 1
 
     async def run_once(self, today: date | None = None) -> ScanResult:
         async with self._lock:
             today = today or date.today()
+            if self.locations:
+                await self.locations.ensure_fresh()
             now = time.time()
             months = month_starts(today, self.cfg.months_ahead)
             res = ScanResult()

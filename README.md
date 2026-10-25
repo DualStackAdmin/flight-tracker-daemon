@@ -31,14 +31,16 @@ Works from **any city in the world**. Set your departure airport in one line of 
 ## Example alert
 
 ```
-✈️ BAK → IST — 85 USD (one way)
+✈️ Baku → Istanbul — 85 USD (one way)
+📍 From: 🇦🇿 Baku, Azerbaijan · Heydar Aliyev International Airport (GYD)
+📍 To: 🇹🇷 Istanbul, Turkiye · Sabiha Gokcen International Airport (SAW)
 🛫 10 Dec 2026, 05:30 · 1 stop
 🏷 Pegasus (PC) 411
 📉 at or below target (≤ 200)
 🔗 Open ticket
 Cached price: confirm on the site before buying.
 ```
-![Telegram Alert Example](screenshot.png)
+
 ## How it works
 
 ```

@@ -178,3 +178,80 @@ async def test_scanner_end_to_end(monkeypatch):
     res2 = await sc.run_once(today=date(2026, 11, 15))
     assert res2.alerts == 0 and len(sent) == 3
     await api.aclose()
+
+
+# ---------- location names (city / country / airport) ----------
+from flight_tracker.locations import Locations, flag  # noqa: E402
+
+CITIES = [{"code": "BAK", "name": "Baku", "name_translations": {"en": "Baku"}, "country_code": "AZ"},
+          {"code": "IST", "name": "Istanbul", "name_translations": {"en": "Istanbul"}, "country_code": "TR"}]
+AIRPORTS = [{"code": "GYD", "name": "Heydar Aliyev International Airport", "city_code": "BAK", "country_code": "AZ"},
+            {"code": "SAW", "name": "Sabiha Gokcen International Airport", "city_code": "IST", "country_code": "TR"}]
+COUNTRIES = [{"code": "AZ", "name": "Azerbaijan", "name_translations": {"en": "Azerbaijan"}},
+             {"code": "TR", "name": "Turkiye", "name_translations": {"en": "Turkiye"}}]
+DATA = "https://api.travelpayouts.com/data/en/"
+
+
+def mock_location_files():
+    respx.get(DATA + "cities.json").mock(return_value=httpx.Response(200, json=CITIES))
+    respx.get(DATA + "airports.json").mock(return_value=httpx.Response(200, json=AIRPORTS))
+    return respx.get(DATA + "countries.json").mock(return_value=httpx.Response(200, json=COUNTRIES))
+
+
+def test_flag():
+    assert flag("AZ") == "🇦🇿" and flag("tr") == "🇹🇷" and flag(None) == "" and flag("X1") == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_locations_download_cache_and_lookup(tmp_path):
+    route = mock_location_files()
+    loc = Locations(tmp_path / "locations.json")
+    await loc.ensure_fresh()
+    assert loc.place("BAK") == "🇦🇿 Baku, Azerbaijan"
+    assert loc.place("SAW") == "🇹🇷 Istanbul, Turkiye"          # airport code -> its city
+    assert loc.airport("GYD") == "Heydar Aliyev International Airport (GYD)"
+    assert loc.short("IST") == "Istanbul 🇹🇷"
+    assert loc.place("XXX") == "XXX" and loc.airport("XXX") == "XXX"   # unknown -> code
+    assert route.call_count == 1
+
+    # Second instance reads the cache, no new download
+    loc2 = Locations(tmp_path / "locations.json")
+    await loc2.ensure_fresh()
+    assert route.call_count == 1 and loc2.place("IST") == "🇹🇷 Istanbul, Turkiye"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_locations_download_failure_never_raises(tmp_path):
+    respx.get(url__startswith=DATA).mock(return_value=httpx.Response(500))
+    loc = Locations(tmp_path / "locations.json")
+    await loc.ensure_fresh()                       # must not raise
+    assert loc.place("IST") == "IST" and loc.airport("SAW") == "SAW"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_alert_shows_city_country_and_airport(tmp_path):
+    mock_location_files()
+    loc = Locations(tmp_path / "locations.json")
+    await loc.ensure_fresh()
+    o = Offer("BAK", "IST", "2026-12-05T08:00:00+04:00", None, 85, "USD", "PC", "411", 0, None, 180,
+              "https://x", origin_airport="GYD", destination_airport="SAW")
+    txt = format_offer(o, ["at or below target"], loc)
+    assert "<b>Baku → Istanbul</b>" in txt
+    assert "📍 From: 🇦🇿 Baku, Azerbaijan · Heydar Aliyev International Airport (GYD)" in txt
+    assert "📍 To: 🇹🇷 Istanbul, Turkiye · Sabiha Gokcen International Airport (SAW)" in txt
+    # Without location data the old format is unchanged
+    assert "<b>BAK → IST</b>" in format_offer(o) and "📍" not in format_offer(o)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_client_reads_airport_codes():
+    respx.get(API).mock(return_value=httpx.Response(200, json={"success": True, "data": [
+        {**row("IST", 95, "2026-12-05T08:00:00+04:00"), "origin_airport": "GYD", "destination_airport": "SAW"}]}))
+    c = TravelpayoutsClient("tok")
+    o = (await c.cheapest_for_month("BAK", "IST", date(2026, 12, 1)))[0]
+    await c.aclose()
+    assert (o.origin_airport, o.destination_airport) == ("GYD", "SAW")

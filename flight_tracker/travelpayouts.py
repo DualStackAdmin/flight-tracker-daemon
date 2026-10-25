@@ -33,6 +33,8 @@ class Offer:
     return_transfers: int | None
     duration_min: int | None
     link: str                   # absolute URL
+    origin_airport: str | None = None
+    destination_airport: str | None = None
 
     @property
     def key(self) -> str:
@@ -125,6 +127,8 @@ class TravelpayoutsClient:
             return_transfers=d.get("return_transfers"),
             duration_min=d.get("duration"),
             link=link,
+            origin_airport=d.get("origin_airport") or None,
+            destination_airport=d.get("destination_airport") or None,
         )
 
     async def cheapest_for_month(self, origin: str, destination: str, month: date, *,

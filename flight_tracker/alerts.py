@@ -5,6 +5,7 @@ import html
 from dataclasses import dataclass
 from datetime import datetime
 
+from .locations import Locations
 from .travelpayouts import Offer
 
 AIRLINES = {
@@ -71,11 +72,28 @@ def stops(n: int | None) -> str:
     return "direct" if n == 0 else f"{n} stop{'s' if n > 1 else ''}"
 
 
-def format_offer(offer: Offer, reasons: list[str] | None = None) -> str:
+def _place_line(label: str, city_code: str, airport_code: str | None, loc: Locations) -> str:
+    parts = [loc.place(city_code)]
+    if airport_code:
+        parts.append(loc.airport(airport_code))
+    return f"📍 {label}: " + " · ".join(html.escape(p) for p in parts if p)
+
+
+def format_offer(offer: Offer, reasons: list[str] | None = None,
+                 locations: Locations | None = None) -> str:
     e = html.escape
     trip = "round trip" if offer.return_at else "one way"
+    if locations:
+        o_name, d_name = locations.city(offer.origin)[0], locations.city(offer.destination)[0]
+    else:
+        o_name, d_name = offer.origin, offer.destination
     lines = [
-        f"✈️ <b>{e(offer.origin)} → {e(offer.destination)}</b> — <b>{offer.price:g} {e(offer.currency)}</b> ({trip})",
+        f"✈️ <b>{e(o_name)} → {e(d_name)}</b> — <b>{offer.price:g} {e(offer.currency)}</b> ({trip})",
+    ]
+    if locations:
+        lines.append(_place_line("From", offer.origin, offer.origin_airport, locations))
+        lines.append(_place_line("To", offer.destination, offer.destination_airport, locations))
+    lines += [
         f"🛫 {_fmt_dt(offer.departure_at)} · {stops(offer.transfers)}",
     ]
     if offer.return_at:
