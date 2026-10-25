@@ -100,7 +100,7 @@ def _place_line(label: str, city_code: str, airport_code: str | None, loc: Locat
 
 def format_offer(offer: Offer, reasons: list[str] | None = None,
                  locations: Locations | None = None, passengers: int = 1,
-                 with_link: bool = True) -> str:
+                 with_link: bool = True, extra: list[str] | None = None) -> str:
     e = html.escape
     trip = "round trip" if offer.return_at else "one way"
     if locations:
@@ -123,6 +123,7 @@ def format_offer(offer: Offer, reasons: list[str] | None = None,
     lines.append(f"🏷 {e(airline_name(offer.airline))} {e(offer.flight_number)}")
     if offer.airline:
         lines.append(baggage_hint(offer.airline))
+    lines += extra or []          # nearby airports, visa, holidays, weather (already HTML-safe)
     if reasons:
         lines.append("📉 " + "; ".join(e(r) for r in reasons))
     if offer.link and with_link:

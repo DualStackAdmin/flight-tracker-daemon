@@ -39,13 +39,15 @@ class ScanResult:
 
 class Scanner:
     def __init__(self, cfg: Config, api: TravelpayoutsClient, storage: Storage,
-                 notify, request_pause: float = 0.5, locations=None, settings=None):
+                 notify, request_pause: float = 0.5, locations=None, settings=None,
+                 enricher=None):
         self.cfg = cfg
         self.api = api
         self.storage = storage
         self.notify = notify            # async def notify(text: str, buttons=None)
         self.settings = settings        # optional live Settings (Telegram-managed)
         self.locations = locations      # optional Locations for city/country names
+        self.enricher = enricher        # optional Enricher: visa, holidays, weather, nearby airports
         self.pause = request_pause
         self._lock = asyncio.Lock()
         self.last_run: float | None = None
@@ -159,8 +161,9 @@ class Scanner:
         self.storage.record(route_key, offer, now=now)
         res.best[route_key] = offer
         if d.send:
+            extra = await self.enricher.lines(offer) if self.enricher else []
             text = format_offer(offer, d.reasons, self.locations,
-                                passengers=self._passengers(), with_link=False)
+                                passengers=self._passengers(), with_link=False, extra=extra)
             await self.notify(text, offer_buttons(offer, route_key))
             self.storage.mark_alert(route_key, offer, now=now)
             res.alerts += 1

@@ -12,9 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .alerts import (airline_name, alert_buttons, format_chart, format_weekend, stops,
+from .alerts import (MONTHS, airline_name, alert_buttons, format_chart, format_weekend, stops,
                      unmute_buttons)
 from .config import Config, load_config
+from .extras import AltOrigins, Climate, Enricher
 from .locations import Locations
 from .scanner import Scanner
 from .settings import (Settings, describe_trip, parse_addroute, parse_trip,
@@ -56,6 +57,14 @@ The same deal is never sent twice.
 
 <b>Your trip</b>
 /family 2: also show the total for 2 passengers
+/alt TBS KUT: also check nearby airports (e.g. a cheaper flight from Kutaisi)
+/holidays: upcoming public holidays
+
+<b>Extra lines in alerts</b>
+💡 the same trip is much cheaper from a nearby airport
+🟢 visa-free · 🟡 eVisa / on arrival · 🔴 visa needed · ❔ check
+🌟 a round trip that needs few or no vacation days
+🌡 typical day / night temperature for that month
 
 <b>Service</b>
 /scan: scan now · /status: health · /help: short list
@@ -64,7 +73,7 @@ The same deal is never sent twice.
 • Use city codes: PAR, LON, IST, DXB, TBS, NYC...
 • Prices are per adult, in {currency}, from searches made in the last 48 hours. Always check the price on the site before buying.
 • If a round-trip target is not set, it is twice the one-way target.
-• 🎒/🧳 is a baggage hint based on the airline, not a guarantee."""
+• 🎒/🧳 baggage, visa and weather lines are hints: confirm before you travel."""
 
 HELP = (
     "<b>Flight Tracker</b> (/start for the full guide)\n"
@@ -77,6 +86,8 @@ HELP = (
     "/removeroute PAR: stop watching a destination\n"
     "/setlimit 150 or /setlimit IST 150: change a target price\n"
     "/family 3: show total prices for 3 passengers\n"
+    "/alt TBS KUT: compare with nearby airports (/alt off)\n"
+    "/holidays: upcoming public holidays\n"
     "/mute IST, /unmute IST, /muted: mute list\n"
     "/chart IST: price history\n"
     "/status: service status\n"
@@ -90,6 +101,7 @@ COMMANDS = [
     ("removeroute", "Stop watching: /removeroute PAR"),
     ("trip", "One way / round / both: /trip IST both 3-7"),
     ("setlimit", "Target price: /setlimit IST 150"), ("family", "Passengers: /family 3"),
+    ("alt", "Nearby airports: /alt TBS KUT"), ("holidays", "Upcoming public holidays"),
     ("mute", "Mute a destination"), ("unmute", "Unmute a destination"), ("muted", "Muted list"),
     ("chart", "Price history: /chart IST"), ("status", "Service status"), ("help", "Short command list"),
     ("start", "Full user guide"),
@@ -148,8 +160,16 @@ class App:
                                        cfg.travelpayouts_marker)
         self.tg = None if dry_run else Telegram(cfg.telegram_token, cfg.telegram_chat_ids)
         self.locations = Locations(Path(cfg.db_path).parent / "locations.json")
+        data_dir = Path(cfg.db_path).parent
+        self.enricher = Enricher(
+            locations=self.locations, origin=cfg.origin,
+            passport=cfg.passport, holidays_country=cfg.holidays,
+            climate=Climate(data_dir / "climate.json", enabled=cfg.climate),
+            alt=AltOrigins(self.api, cfg.alt_flex_days, cfg.alt_min_saving_percent),
+            alt_origins=self.settings.alt_origins)
         self.scanner = Scanner(cfg, self.api, self.storage, self.notify,
-                               locations=self.locations, settings=self.settings)
+                               locations=self.locations, settings=self.settings,
+                               enricher=self.enricher)
         self.stop = asyncio.Event()
         self.started = time.time()
 
@@ -185,6 +205,8 @@ class App:
             lines.append(f"• Anywhere: {describe_trip(trip, lo, hi)}{lim}")
         else:
             lines.append("• Anywhere: off (anywhere.enabled in config.yaml)")
+        alts = s.alt_origins()
+        lines.append("Nearby airports: " + (", ".join(a.code for a in alts) if alts else "off (/alt TBS KUT)"))
         lines.append(f"Passengers: {s.passengers}")
         if muted:
             lines.append("Muted: " + ", ".join(sorted(muted)))
@@ -227,6 +249,33 @@ class App:
                     return (f"{target} is not in your routes. Add it first, e.g. "
                             f"/addroute {target} 150 {'both 3-7' if mode == 'both' else 'rt 3-7' if mode == 'rt' else ''}".rstrip())
                 return f"✅ {target}: {describe_trip(mode, *self._stay(target))}.\n\n" + self._routes_text()
+            if cmd == "/alt":
+                if not args:
+                    alts = s.alt_origins()
+                    return ("Nearby airports: " + ", ".join(a.code for a in alts) if alts else
+                            "Nearby airports are off.") + \
+                        "\nSet with /alt TBS KUT, turn off with /alt off."
+                if args[0].lower() in ("off", "none", "clear"):
+                    s.set_alt_origins([])
+                    return "✅ Nearby airport comparison turned off."
+                codes = [a.upper() for a in args]
+                bad = [c for c in codes if not valid_code(c)]
+                if bad:
+                    return f"⚠️ Not IATA codes: {', '.join(bad)}. Example: /alt TBS KUT"
+                s.set_alt_origins(codes[:4])
+                return (f"✅ Each alert will also check {', '.join(codes[:4])} for the same dates "
+                        f"(±{self.cfg.alt_flex_days} days) and tell you if it is "
+                        f"at least {self.cfg.alt_min_saving_percent:g}% cheaper.")
+            if cmd == "/holidays":
+                self.enricher.resolve()
+                hol = self.enricher.holidays
+                if not hol or not hol.enabled:
+                    return "No holiday calendar for your country yet (extras/holidays_XX.yaml)."
+                today = datetime.now(ZoneInfo(self.cfg.timezone)).date()
+                rows = [f"• {d.day} {MONTHS[d.month]} {d.year} ({d:%a}): {html.escape(n, quote=False)}"
+                        for d, n in hol.upcoming(today)]
+                return "🗓 <b>Upcoming public holidays</b>\n" + "\n".join(rows) + \
+                    "\n<i>Round trips over these days get a 🌟 when few vacation days are needed.</i>"
             if cmd == "/removeroute":
                 if not args:
                     return "Usage: /removeroute PAR"

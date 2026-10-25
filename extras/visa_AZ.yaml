@@ -1,0 +1,88 @@
+# Visa hints for holders of an AZERBAIJANI passport (tourism, short stays).
+#
+# This is a community-maintained hint, NOT legal advice. Visa rules change often:
+# always confirm with the embassy or an official source (e.g. IATA Travel Centre)
+# before you buy a ticket. Last reviewed: 2026-10.
+#
+# Countries not listed below show "❔ check visa".
+# Use ISO 3166-1 alpha-2 country codes. Edit freely and send a pull request.
+#
+# Other passports: copy this file to visa_XX.yaml (XX = your country code)
+# and set `passport: XX` in config.yaml.
+
+passport_name: Azerbaijani
+
+# 🟢 No visa needed for a short tourist stay
+free:
+  - GE   # Georgia
+  - TR   # Turkiye
+  - RU   # Russia
+  - BY   # Belarus
+  - UA   # Ukraine
+  - KZ   # Kazakhstan
+  - KG   # Kyrgyzstan
+  - UZ   # Uzbekistan
+  - TJ   # Tajikistan
+  - MD   # Moldova
+  - IR   # Iran
+  - QA   # Qatar
+  - RS   # Serbia
+  - ME   # Montenegro
+  - MV   # Maldives (free visa on arrival)
+
+# 🟡 Easy: eVisa online or visa on arrival
+evisa:
+  - AE   # United Arab Emirates
+  - SA   # Saudi Arabia
+  - OM   # Oman
+  - BH   # Bahrain
+  - EG   # Egypt
+  - JO   # Jordan
+  - IN   # India
+  - LK   # Sri Lanka
+  - VN   # Vietnam
+  - ID   # Indonesia
+  - KH   # Cambodia
+  - KE   # Kenya
+  - TZ   # Tanzania
+
+# 🔴 Embassy visa needed in advance (Schengen and similar)
+hard:
+  # Schengen area
+  - AT
+  - BE
+  - BG
+  - CH
+  - CZ
+  - DE
+  - DK
+  - EE
+  - ES
+  - FI
+  - FR
+  - GR
+  - HR
+  - HU
+  - IS
+  - IT
+  - LI
+  - LT
+  - LU
+  - LV
+  - MT
+  - NL
+  - NO
+  - PL
+  - PT
+  - RO
+  - SE
+  - SI
+  - SK
+  # Others
+  - GB
+  - IE
+  - CY
+  - US
+  - CA
+  - AU
+  - NZ

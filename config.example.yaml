@@ -11,6 +11,19 @@ timezone: Asia/Baku       # your local timezone (e.g. Europe/Istanbul, Europe/Lo
 db_path: data/prices.db
 passengers: 1            # show totals for N people (can also be changed with /family 3)
 
+# Extra lines in alerts
+passport: auto           # visa hints: country code (AZ, TR, ...), auto = origin country, off
+holidays: auto           # "vacation days needed" from extras/holidays_XX.yaml; auto / XX / off
+climate: true            # typical day/night temperature (Open-Meteo, last year's weather)
+
+# Nearby departure airports: also check the same trip from here (or set with /alt TBS KUT)
+alt_origins: []
+#  - code: TBS
+#  - code: KUT
+#    note: "long drive, often low-cost flights"
+alt_flex_days: 2           # compare departures within +/- N days
+alt_min_saving_percent: 25 # only mention it when at least this much cheaper
+
 # Specific destinations (IATA codes: IST, DXB, TBS, LON, PAR, ...)
 routes:
   - destination: IST     # Istanbul (IST + SAW)

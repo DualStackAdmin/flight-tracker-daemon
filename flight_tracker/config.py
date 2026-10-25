@@ -59,6 +59,12 @@ class Config:
     alerts: Alerts = field(default_factory=Alerts)
     db_path: str = "data/prices.db"
     passengers: int = 1                 # prices are per person; totals shown for N people
+    passport: str = "auto"              # visa hints: country code, "auto" (origin country) or "off"
+    holidays: str = "auto"              # public holidays: country code, "auto" or "off"
+    climate: bool = True                # typical weather line (Open-Meteo)
+    alt_origins: list[dict] = field(default_factory=list)   # [{code: TBS, note: "..."}]
+    alt_flex_days: int = 2              # +/- days when comparing nearby airports
+    alt_min_saving_percent: float = 25  # only mention a nearby airport if this much cheaper
 
     # from .env
     travelpayouts_token: str = ""
@@ -119,6 +125,12 @@ def load_config(config_path: str | Path = "config.yaml", env_path: str | Path = 
         alerts=Alerts(**(raw.get("alerts") or {})),
         db_path=raw.get("db_path", "data/prices.db"),
         passengers=int(raw.get("passengers", 1) or 1),
+        passport=str(raw.get("passport", "auto")),
+        holidays=str(raw.get("holidays", "auto")),
+        climate=bool(raw.get("climate", True)),
+        alt_origins=[a if isinstance(a, dict) else {"code": str(a)} for a in raw.get("alt_origins") or []],
+        alt_flex_days=int(raw.get("alt_flex_days", 2)),
+        alt_min_saving_percent=float(raw.get("alt_min_saving_percent", 25)),
         travelpayouts_token=os.environ.get("TRAVELPAYOUTS_TOKEN", ""),
         travelpayouts_marker=os.environ.get("TRAVELPAYOUTS_MARKER", ""),
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),

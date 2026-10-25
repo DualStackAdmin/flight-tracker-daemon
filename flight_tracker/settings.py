@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict
 
 from .config import Config, Route
+from .extras import AltOrigin
 from .storage import Storage
 
 SCHEMA = """
@@ -124,6 +125,17 @@ class Settings:
             self.storage.set_meta("anywhere_stay", f"{stay[0]}-{stay[1]}")
         if rt_price is not None:
             self.storage.set_meta("anywhere_rt_max_price", str(rt_price))
+
+    # ---------- nearby departure airports ----------
+    def alt_origins(self):
+        """List of AltOrigin. Telegram (/alt) overrides config.yaml."""
+        notes = {str(a.get("code", "")).upper(): a.get("note", "") for a in self.cfg.alt_origins}
+        v = self.storage.get_meta("alt_origins")
+        codes = [c for c in v.split(",") if c] if v is not None else list(notes)
+        return [AltOrigin(c, notes.get(c, "")) for c in codes]
+
+    def set_alt_origins(self, codes: list[str]) -> None:
+        self.storage.set_meta("alt_origins", ",".join(codes))
 
     # ---------- passengers ----------
     @property

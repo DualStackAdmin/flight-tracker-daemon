@@ -26,6 +26,10 @@ Works from **any city in the world**. Set your departure airport in one line of 
 - ⚙️ **Live configuration from Telegram**: `/addroute PAR 150`, `/removeroute PAR`, `/setlimit IST 120`. No SSH, no restart.
 - 👨‍👩‍👧 **Family mode**: `/family 3` adds the total price for 3 passengers to every alert.
 - 🎒 **Baggage hint**: flags low-cost airlines whose cheapest fares usually include hand luggage only.
+- 💡 **Nearby airports**: `/alt TBS KUT` also checks the same trip from nearby airports and tells you when it is much cheaper ("150 USD from Baku, 45 USD from Kutaisi").
+- 🛂 **Visa hint**: 🟢 visa-free · 🟡 eVisa / on arrival · 🔴 visa needed, based on an editable per-passport file ([`extras/visa_AZ.yaml`](extras/visa_AZ.yaml)).
+- 🌟 **Holiday planner**: round trips that need few or no vacation days thanks to public holidays get a 🌟 ([`extras/holidays_AZ.yaml`](extras/holidays_AZ.yaml)).
+- 🌡 **Weather**: typical day/night temperature at the destination for that month.
 - 🤖 **Telegram command menu** registered automatically (`/top`, `/weekend`, `/routes`, ...).
 - 🗄 **Price history** stored in SQLite.
 - 🛡 **Production-ready on Ubuntu**:
@@ -65,12 +69,20 @@ Cached price: confirm on the site before buying.
 | `/family 3` | Show totals for 3 passengers (`/family 1` to reset) |
 | `/mute IST` / `/unmute IST` / `/muted` | Manage the mute list |
 | `/chart IST` | Lowest price per day, last 30 days |
+| `/alt TBS KUT` / `/alt off` | Compare every alert with nearby departure airports |
+| `/holidays` | Upcoming public holidays |
 | `/status` | Service status |
 | `/start` | Full user guide · `/help` short command list |
 
 If no round-trip target is set, it defaults to twice the one-way target.
 
 Changes made from Telegram are stored in the database on top of `config.yaml` and survive restarts.
+
+### Visa, holidays and other countries
+
+Visa hints and holidays come from small YAML files in [`extras/`](extras/), picked by country code. With `passport: auto` and `holidays: auto`, the country of your `origin` city is used (Baku → `AZ` → `visa_AZ.yaml`, `holidays_AZ.yaml`).
+
+To support another passport or country, copy a file to `visa_XX.yaml` / `holidays_XX.yaml` and open a pull request. Visa rules and holiday transfers change, so **always confirm before you travel**.
 
 > **About baggage:** the flight-price API does not return baggage allowances. The 🎒/🧳 line is a hint based on the airline (low-cost vs full-service). Always check the fare conditions before buying.
 
@@ -168,6 +180,9 @@ The bot says **🚀 Flight Tracker started**. Send `/scan` to run a scan right a
 | `alerts.drop_percent` | Alert when the fare is this % below the 30-day low |
 | `alerts.cooldown_hours` | Minimum time between alerts for one route |
 | `passengers` | Default number of passengers for totals (also `/family`) |
+| `passport`, `holidays` | Country code for visa hints / holidays, `auto` or `off` |
+| `climate` | Typical weather line on/off |
+| `alt_origins`, `alt_flex_days`, `alt_min_saving_percent` | Nearby departure airports to compare (also `/alt`) |
 
 See [`config.example.yaml`](config.example.yaml) for a full example.
 
@@ -199,10 +214,12 @@ flight_tracker/
   storage.py       # SQLite price history
   alerts.py        # alert rules, message formatting, buttons, charts
   settings.py      # live settings changed from Telegram
+  extras.py        # nearby airports, visa, holidays, weather
   locations.py     # city / country / airport names
   scanner.py       # scan cycle
   telegram.py      # send messages + commands (long polling)
   main.py          # service, daily digest, CLI
+extras/            # visa and holiday data per country (editable)
 deploy/            # installer + systemd unit
 tests/             # tests with a mocked API
 ```
@@ -230,7 +247,9 @@ If this project saved you money on a ticket, give it a ⭐
 
 ## Disclaimer
 
-This project is not affiliated with Aviasales, Travelpayouts, Telegram or any airline. Prices are informational and may differ from the final booking price.
+This project is not affiliated with Aviasales, Travelpayouts, Telegram or any airline. Prices are informational and may differ from the final booking price. Visa, holiday, baggage and weather lines are hints, not official information.
+
+Weather data by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0), generated using Copernicus Climate Change Service information.
 
 ## License
 

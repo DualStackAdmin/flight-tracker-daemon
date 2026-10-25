@@ -626,3 +626,166 @@ async def test_app_trip_command_and_guide(app):
     assert "Unknown trip type" in await h(1, "/trip IST sometimes")
     assert "Watching DXB" in await h(1, "/addroute DXB 300 both 4-8")
     assert "DXB: one way + round trip 4–8 days" in await h(1, "/routes")
+
+
+# =====================================================================
+# v1.3: nearby airports, visa hints, holidays, weather
+# =====================================================================
+from pathlib import Path  # noqa: E402
+
+from flight_tracker.extras import (AltOrigin, AltOrigins, Climate, Enricher,  # noqa: E402
+                                   Holidays, Visa, temp_icon)
+
+EXTRAS = Path(__file__).resolve().parent.parent / "extras"
+METEO = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def test_shipped_data_files_load():
+    v = Visa(EXTRAS / "visa_AZ.yaml", "AZ")
+    assert v.line("GE").startswith("🟢") and v.line("AE").startswith("🟡") and v.line("IT").startswith("🔴")
+    assert v.line("ZZ").startswith("❔") and v.line("AZ") is None       # own country: no line
+    h = Holidays(EXTRAS / "holidays_AZ.yaml")
+    assert h.days[date(2026, 3, 22)] == "Novruz"
+    assert Visa(None, "XX").line("GE") is None                          # no file: feature off
+
+
+def test_holidays_carry_over_and_leave_days(tmp_path):
+    f = tmp_path / "h.yaml"
+    f.write_text("weekend_carry_over: true\nholidays:\n"
+                 "  2026-11-08: Victory Day\n  2026-11-09: State Flag Day\n"
+                 "  2026-03-20: Novruz\n  2026-03-21: Novruz\n  2026-03-22: Novruz\n"
+                 "  2026-03-23: Novruz\n  2026-03-24: Novruz\n")
+    h = Holidays(f)
+    # Nov 8 2026 is a Sunday -> Mon 9 is already a holiday -> Tue 10 is the moved day off
+    assert h.days[date(2026, 11, 10)] == "Victory Day (moved)"
+    # Mar 21-22 2026 are Sat/Sun -> moved to Wed 25 and Thu 26
+    assert date(2026, 3, 25) in h.days and date(2026, 3, 26) in h.days
+    # Fri 20 Mar 08:00 -> Sun 29 Mar: every weekday is a holiday or moved day, only Fri 27 is a working day
+    assert h.leave_needed("2026-03-20T08:00:00+04:00", "2026-03-29T20:00:00+04:00") == (1, ["Novruz"])
+    off = rt_offer("IST", 100, "2026-03-20T08:00:00+04:00", "2026-03-26T20:00:00+04:00")
+    assert h.line(off) == "🌟 No vacation days needed: covers Novruz"
+    two = rt_offer("IST", 100, "2026-03-20T08:00:00+04:00", "2026-03-29T20:00:00+04:00")
+    assert h.line(two) == "🌟 Only 1 vacation day needed thanks to Novruz"
+    wk = rt_offer("IST", 100, "2026-11-13T19:00:00+04:00", "2026-11-15T20:00:00+04:00")
+    assert h.line(wk) == "🌟 No vacation days needed (weekend trip)"
+    long = rt_offer("IST", 100, "2026-04-06T08:00:00+04:00", "2026-04-17T20:00:00+04:00")
+    assert h.line(long) is None and h.line(offer(50)) is None          # long trip / one way
+
+
+def test_climate_reference_year_and_icons():
+    assert Climate.reference_year(1, date(2026, 10, 25)) == 2026
+    assert Climate.reference_year(12, date(2026, 10, 25)) == 2025
+    assert Climate.reference_year(10, date(2026, 10, 25)) == 2025       # current month not complete
+    assert [temp_icon(t) for t in (-5, 8, 20, 30, 38)] == ["🥶", "🧥", "🌤", "☀️", "🔥"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_climate_fetch_cache_and_failure(tmp_path):
+    route = respx.get(METEO).mock(return_value=httpx.Response(200, json={"daily": {
+        "time": ["2026-01-01", "2026-01-02"],
+        "temperature_2m_max": [-1.0, -3.0], "temperature_2m_min": [-9.0, -11.0]}}))
+    c = Climate(tmp_path / "climate.json")
+    assert await c.month_avg(39.9, 116.4, 1, today=date(2026, 10, 25)) == (-2, -10)
+    p = route.calls.last.request.url.params
+    assert (p["start_date"], p["end_date"]) == ("2026-01-01", "2026-01-31")
+    c2 = Climate(tmp_path / "climate.json")                              # cache on disk
+    assert await c2.month_avg(39.9, 116.4, 1) == (-2, -10) and route.call_count == 1
+    respx.get(METEO).mock(return_value=httpx.Response(500))
+    assert await Climate(tmp_path / "x.json").month_avg(1, 1, 5) is None   # failure -> no line, no crash
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_alt_origins_compare(monkeypatch):
+    def responder(request):
+        p = request.url.params
+        if p["origin"] == "KUT":
+            return httpx.Response(200, json={"success": True, "data": [
+                row("MIL", 45, "2026-12-11T09:00:00+04:00"),          # 1 day off: ok
+                row("MIL", 20, "2026-12-25T09:00:00+04:00")]})         # too far from the date
+        if p["origin"] == "TBS":
+            return httpx.Response(200, json={"success": True, "data": [row("MIL", 140, "2026-12-10T09:00:00+04:00")]})
+        return httpx.Response(200, json={"success": True, "data": []})
+
+    respx.get(API).mock(side_effect=responder)
+    api = TravelpayoutsClient("tok")
+    alt = AltOrigins(api, flex_days=2, min_saving_percent=25)
+    base = Offer("BAK", "MIL", "2026-12-10T08:00:00+04:00", None, 150, "USD", "J2", "1", 0, None, 1, "https://x")
+    lines = await alt.lines(base, [AltOrigin("KUT", "~9 h by car"), AltOrigin("TBS"), AltOrigin("MIL")], None)
+    await api.aclose()
+    assert len(lines) == 1                                             # TBS only 7% cheaper, MIL = destination
+    assert "From KUT: <b>45 USD</b> on 11 Dec (save 105) (~9 h by car). Worth the trip?" in lines[0]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_full_alert_with_all_extras(tmp_path, monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    mock_location_files()
+    respx.get(DATA + "cities.json").mock(return_value=httpx.Response(200, json=[
+        {"code": "BAK", "name": "Baku", "country_code": "AZ", "coordinates": {"lat": 40.4, "lon": 49.9}},
+        {"code": "IST", "name": "Istanbul", "country_code": "TR", "coordinates": {"lat": 41.0, "lon": 28.9}},
+        {"code": "TBS", "name": "Tbilisi", "country_code": "GE", "coordinates": {"lat": 41.7, "lon": 44.8}}]))
+    respx.get(DATA + "countries.json").mock(return_value=httpx.Response(200, json=[
+        {"code": "AZ", "name": "Azerbaijan"}, {"code": "TR", "name": "Turkiye"}, {"code": "GE", "name": "Georgia"}]))
+    respx.get(METEO).mock(return_value=httpx.Response(200, json={"daily": {
+        "temperature_2m_max": [16.0], "temperature_2m_min": [8.0]}}))
+
+    def api(request):
+        p = request.url.params
+        price = 40 if p["origin"] == "TBS" else 120
+        return httpx.Response(200, json={"success": True, "data": [
+            row("IST", price, "2026-03-20T08:00:00+04:00", "2026-03-24T20:00:00+04:00")]})
+
+    respx.get(API).mock(side_effect=api)
+    loc = Locations(tmp_path / "loc.json")
+    await loc.ensure_fresh()
+    assert loc.coords("SAW") == (41.0, 28.9) and loc.country_code("BAK") == "AZ"
+    client = TravelpayoutsClient("tok")
+    enr = Enricher(locations=loc, origin="BAK", climate=Climate(tmp_path / "c.json"),
+                   alt=AltOrigins(client), alt_origins=lambda: [AltOrigin("TBS")])
+    o = (await client.cheapest_for_month("BAK", "IST", date(2026, 3, 1), round_trip=True))[0]
+    lines = await enr.lines(o)
+    await client.aclose()
+    text = "\n".join(lines)
+    assert "💡 From Tbilisi 🇬🇪: <b>40 USD</b>" in text
+    assert "🟢 Visa-free for Azerbaijani passport" in text
+    assert "🌟 No vacation days needed: covers Novruz" in text
+    assert "🌤 March in Istanbul: about +16°C day / +8°C night" in text
+    full = format_offer(o, ["test"], loc, extra=lines)
+    assert full.index("💡") < full.index("📉")
+
+
+@pytest.mark.asyncio
+async def test_enricher_never_breaks_alerts():
+    class Boom:
+        enabled = True
+
+        async def line(self, *a):
+            raise RuntimeError("down")
+
+    enr = Enricher(locations=None, climate=Boom(), passport="off", holidays_country="off")
+    assert await enr.lines(offer(50)) == []
+
+
+def test_location_cache_upgrade(tmp_path):
+    p = tmp_path / "locations.json"
+    p.write_text(_json.dumps({"saved_at": 9e12, "cities": {"BAK": ["Baku", "AZ"]}, "airports": {}, "countries": {}}))
+    assert Locations(p)._read_cache() is False          # v1 cache without coordinates -> re-download
+
+
+@pytest.mark.asyncio
+async def test_app_alt_and_holidays_commands(app):
+    h = app.handle_command
+    assert "Nearby airports are off" in await h(1, "/alt")
+    assert "check TBS, KUT" in await h(1, "/alt tbs kut")
+    assert [a.code for a in app.settings.alt_origins()] == ["TBS", "KUT"]
+    assert "Nearby airports: TBS, KUT" in await h(1, "/routes")
+    assert "Not IATA codes: TBILISI" in await h(1, "/alt TBILISI")
+    assert "turned off" in await h(1, "/alt off") and app.settings.alt_origins() == []
+    app.enricher.passport_setting = app.enricher.holidays_setting = "AZ"   # no location data in tests
+    out = await h(1, "/holidays")
+    assert "Upcoming public holidays" in out
+    guide = await h(1, "/start")
+    assert len(guide) < 4000 and "/alt TBS KUT" in guide and "🟢 visa-free" in guide
