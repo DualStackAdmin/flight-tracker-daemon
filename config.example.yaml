@@ -9,6 +9,7 @@ scan_interval_minutes: 60  # API data is cached for 48h; 30-60 min is plenty
 digest_hour: 9           # daily summary at 09:00 local time; set to null to disable
 timezone: Asia/Baku       # your local timezone (e.g. Europe/Istanbul, Europe/London)
 db_path: data/prices.db
+passengers: 1            # show totals for N people (can also be changed with /family 3)
 
 # Specific destinations (IATA codes: IST, DXB, TBS, LON, PAR, ...)
 routes:

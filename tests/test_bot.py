@@ -161,7 +161,7 @@ async def test_scanner_end_to_end(monkeypatch):
                  anywhere=Anywhere(enabled=True, max_price=100), alerts=Alerts(), months_ahead=1)
     sent = []
 
-    async def notify(t):
+    async def notify(t, buttons=None):
         sent.append(t)
 
     st = Storage(":memory:")
@@ -316,3 +316,225 @@ async def test_telegram_falls_back_to_plain_text(monkeypatch):
     second = _json.loads(route.calls[1].request.content)
     assert "parse_mode" not in second and second["text"] == "broken markup & text"
     assert html_to_text("<a href='x'>↗</a>") == "↗"
+
+
+# =====================================================================
+# v1.1 features: inline buttons, /weekend, live config, /family, baggage hint
+# =====================================================================
+import json as _json  # noqa: E402
+
+from flight_tracker.alerts import (alert_buttons, baggage_hint, format_chart,  # noqa: E402
+                                   format_weekend, is_weekend_trip, offer_buttons)
+from flight_tracker.main import App, format_top  # noqa: E402
+from flight_tracker.settings import Settings, parse_addroute  # noqa: E402
+
+
+def rt_offer(dest, price, dep, ret, airline="J2"):
+    return Offer("BAK", dest, dep, ret, price, "USD", airline, "1", 0, 0, 100, f"https://t/{dest}")
+
+
+# ---------- settings / live config ----------
+def test_parse_addroute():
+    r = parse_addroute(["par"])
+    assert (r.destination, r.max_price, r.round_trip, r.direct_only) == ("PAR", None, False, False)
+    r = parse_addroute(["DXB", "400", "rt", "4-10", "direct"])
+    assert (r.max_price, r.round_trip, r.min_days, r.max_days, r.direct_only) == (400, True, 4, 10, True)
+    for bad in ([], ["PARIS"], ["PAR", "abc"], ["PAR", "-5"], ["PAR", "rt", "10-4"]):
+        with pytest.raises(ValueError):
+            parse_addroute(bad)
+
+
+def test_settings_override_config_routes():
+    cfg = Config(routes=[Route("IST", max_price=200), Route("TBS", max_price=120)])
+    s = Settings(cfg, Storage(":memory:"))
+    assert {r.destination for r in s.routes()} == {"IST", "TBS"}
+    s.add_route(Route("PAR", max_price=150))
+    assert s.set_route_limit("IST", 99) and s.get_route("IST").max_price == 99
+    assert not s.set_route_limit("XXX", 99)
+    assert s.remove_route("TBS") and not s.remove_route("TBS")
+    assert {r.destination for r in s.routes()} == {"IST", "PAR"}
+    s.add_route(Route("TBS"))                       # re-adding a removed config route works
+    assert "TBS" in {r.destination for r in s.routes()}
+
+
+def test_settings_anywhere_passengers_mute():
+    cfg = Config(anywhere=Anywhere(enabled=True, max_price=100))
+    s = Settings(cfg, Storage(":memory:"))
+    assert s.anywhere_max_price == 100 and s.passengers == 1
+    s.anywhere_max_price = 80
+    s.passengers = 3
+    assert s.anywhere_max_price == 80 and s.passengers == 3
+    s.mute("IST")
+    assert s.muted() == {"IST"} and s.unmute("IST") and not s.unmute("IST")
+
+
+# ---------- alert content ----------
+def test_baggage_hint_and_family_total():
+    assert "hand luggage" in baggage_hint("W6") and "Full-service" in baggage_hint("J2")
+    o = offer(85)
+    txt = format_offer(o, passengers=3, with_link=False)
+    assert "3 passengers: <b>255 USD</b> total" in txt
+    assert "Open ticket" not in txt and "🧳" in txt
+    assert "passengers" not in format_offer(o)       # single passenger: no total line
+
+
+def test_offer_buttons_shape_and_callback_size():
+    o = offer(85)
+    rows = offer_buttons(o, "BAK-IST-ow")
+    assert rows[0][0] == {"text": "✈️ Open ticket", "url": "https://x"}
+    datas = [b["callback_data"] for b in rows[1]]
+    assert datas == ["mute:IST", "chart:BAK-IST-ow"]
+    assert all(len(d.encode()) <= 64 for d in datas)
+    assert alert_buttons(None, "IST", None) == [[{"text": "🔕 Mute IST", "callback_data": "mute:IST"}]]
+
+
+def test_weekend_filter():
+    fri_eve = "2026-11-13T19:30:00+04:00"   # Friday
+    assert is_weekend_trip(rt_offer("TBS", 90, fri_eve, "2026-11-15T21:00:00+04:00"))
+    assert not is_weekend_trip(rt_offer("TBS", 90, "2026-11-13T08:00:00+04:00", "2026-11-15T21:00:00+04:00"))  # Fri morning
+    assert not is_weekend_trip(rt_offer("TBS", 90, fri_eve, "2026-11-16T09:00:00+04:00"))  # Monday return
+    assert not is_weekend_trip(rt_offer("TBS", 90, "2026-11-12T19:30:00+04:00", "2026-11-15T21:00:00+04:00"))  # Thursday
+    assert not is_weekend_trip(offer(50))                       # one way
+
+
+def test_format_weekend_and_chart():
+    deals = [rt_offer("TBS", 90, "2026-11-13T19:30:00+04:00", "2026-11-15T21:00:00+04:00")]
+    txt = format_weekend(deals, passengers=2)
+    assert "Fri 13 Nov 19:30 → Sun 21:00" in txt and "(×2 = 180)" in txt
+    assert "No Friday-to-Sunday" in format_weekend([])
+    rows = [{"day": "2026-10-20", "price": 120.0, "currency": "USD"},
+            {"day": "2026-10-21", "price": 99.0, "currency": "USD"}]
+    chart = format_chart("BAK-IST-ow", rows)
+    assert "<pre>" in chart and "◀ low" in chart and "Now: <b>99</b>" in chart
+    assert "No price history" in format_chart("BAK-IST-ow", [])
+
+
+# ---------- scanner with live settings ----------
+@pytest.mark.asyncio
+@respx.mock
+async def test_scanner_respects_mute_and_dynamic_routes(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+
+    def responder(request):
+        dest = request.url.params.get("destination")
+        if dest:
+            return httpx.Response(200, json={"success": True, "data": [row(dest, 50, "2026-12-03T08:00:00+04:00")]})
+        return httpx.Response(200, json={"success": True, "data": [
+            row("TBS", 40, "2026-12-02T08:00:00+04:00"), row("EVN", 45, "2026-12-02T08:00:00+04:00")]})
+
+    respx.get(API).mock(side_effect=responder)
+    cfg = Config(routes=[Route("IST", max_price=100)], anywhere=Anywhere(enabled=True, max_price=100),
+                 months_ahead=1)
+    st = Storage(":memory:")
+    s = Settings(cfg, st)
+    s.add_route(Route("PAR", max_price=100))
+    s.mute("IST")
+    s.mute("EVN")
+    sent = []
+
+    async def notify(t, buttons=None):
+        sent.append((t, buttons))
+
+    api = TravelpayoutsClient("tok")
+    res = await Scanner(cfg, api, st, notify, settings=s).run_once(today=date(2026, 11, 15))
+    await api.aclose()
+    assert set(res.best) == {"BAK-PAR-ow", "BAK-TBS-any"}       # IST and EVN muted
+    assert all(b and b[0][0]["url"] for _, b in sent)           # every alert has buttons
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_weekend_deals(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    data = [
+        {**row("TBS", 120, "2026-11-13T19:30:00+04:00", "2026-11-15T20:00:00+04:00")},
+        {**row("TBS", 100, "2026-11-20T18:00:00+04:00", "2026-11-22T20:00:00+04:00")},
+        {**row("IST", 80, "2026-11-13T07:00:00+04:00", "2026-11-15T20:00:00+04:00")},   # Fri morning
+        {**row("DXB", 300, "2026-11-13T21:00:00+04:00", "2026-11-15T23:00:00+04:00")},
+    ]
+    route = respx.get(API).mock(return_value=httpx.Response(200, json={"success": True, "data": data}))
+    cfg = Config(months_ahead=1)
+    api = TravelpayoutsClient("tok")
+    sc = Scanner(cfg, api, Storage(":memory:"), None)
+    deals = await sc.weekend_deals(today=date(2026, 11, 1))
+    assert [(d.destination, d.price) for d in deals] == [("TBS", 100), ("DXB", 300)]
+    assert route.calls.last.request.url.params["one_way"] == "false"
+    assert [d.destination for d in await sc.weekend_deals(today=date(2026, 11, 1), max_price=200)] == ["TBS"]
+    await api.aclose()
+
+
+# ---------- Telegram commands and buttons (through App) ----------
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_TOKEN", "t")
+    (tmp_path / "c.yaml").write_text(
+        f"db_path: {tmp_path}/p.db\nroutes:\n  - destination: IST\n    max_price: 200\n"
+        "anywhere:\n  enabled: true\n  max_price: 100\n")
+    a = App(load_config(tmp_path / "c.yaml", tmp_path / "none.env"), dry_run=True)
+    yield a
+    a.storage.close()
+
+
+@pytest.mark.asyncio
+async def test_app_live_config_commands(app):
+    h = app.handle_command
+    assert "Watching PAR" in await h(1, "/addroute PAR 150 rt 3-7")
+    assert "PAR: round trip 3–7 days, target ≤ 150" in await h(1, "/routes")
+    assert "not a 3-letter" in await h(1, "/addroute PARIS")
+    assert "set to 99" in await h(1, "/setlimit IST 99")
+    assert "Add it first" in await h(1, "/setlimit XXX 99")
+    assert "'Anywhere' target price set to 80" in await h(1, "/setlimit 80")
+    assert "not a number" in await h(1, "/setlimit abc")
+    assert "Removed IST" in await h(1, "/removeroute IST")
+    assert "3 passengers" in await h(1, "/family 3")
+    assert "1 to 9" in await h(1, "/family 20")
+    assert "IST muted" in await h(1, "/mute ist")
+    assert "Muted: IST" in await h(1, "/muted")
+    assert "unmuted" in await h(1, "/unmute IST")
+    assert "No price history" in await h(1, "/chart IST")
+    routes = await h(1, "/routes")
+    assert "Passengers: 3" in routes and "Anywhere (target ≤ 80)" in routes and "IST" not in routes
+
+
+@pytest.mark.asyncio
+async def test_app_buttons(app):
+    msg = {"reply_markup": {"inline_keyboard": offer_buttons(offer(85), "BAK-IST-ow")}}
+    toast, reply, kb = await app.handle_callback(1, "mute:IST", msg)
+    assert toast == "🔕 IST muted" and reply is None and app.settings.muted() == {"IST"}
+    assert kb[0][0]["url"] == "https://x" and kb[1][0]["callback_data"] == "unmute:IST"
+    assert kb[1][1]["callback_data"] == "chart:BAK-IST-ow"
+    toast, _, kb = await app.handle_callback(1, "unmute:IST", {"reply_markup": {"inline_keyboard": kb}})
+    assert app.settings.muted() == set() and kb[1][0]["callback_data"] == "mute:IST"
+    app.storage.record("BAK-IST-ow", offer(99))
+    _, reply, kb = await app.handle_callback(1, "chart:BAK-IST-ow", {})
+    assert "📊" in reply and kb is None
+    assert "(297)" in format_top(app.storage, passengers=3)
+
+
+# ---------- Telegram transport for buttons ----------
+@pytest.mark.asyncio
+@respx.mock
+async def test_telegram_buttons_and_callbacks():
+    base = "https://api.telegram.org/botTOKEN/"
+    send = respx.post(base + "sendMessage").mock(return_value=httpx.Response(200, json={"ok": True}))
+    answer = respx.post(base + "answerCallbackQuery").mock(return_value=httpx.Response(200, json={"ok": True}))
+    edit = respx.post(base + "editMessageReplyMarkup").mock(return_value=httpx.Response(200, json={"ok": True}))
+    tg = Telegram("TOKEN", [42])
+    kb = [[{"text": "x", "callback_data": "mute:IST"}]]
+
+    await tg.send(long_top_message(), buttons=kb)       # long message: buttons only on the last part
+    bodies = [_json.loads(c.request.content) for c in send.calls]
+    assert "reply_markup" not in bodies[0] and bodies[-1]["reply_markup"] == {"inline_keyboard": kb}
+
+    async def on_cb(chat_id, data, message):
+        return "done", "reply text", [[{"text": "y", "callback_data": "unmute:IST"}]]
+
+    await tg._handle_callback({"id": "1", "data": "mute:IST",
+                               "message": {"message_id": 7, "chat": {"id": 42}}}, on_cb)
+    assert _json.loads(answer.calls.last.request.content)["text"] == "done"
+    assert _json.loads(edit.calls.last.request.content)["message_id"] == 7
+    # unauthorized chat: only acknowledged, handler not called
+    await tg._handle_callback({"id": "2", "data": "mute:IST",
+                               "message": {"message_id": 8, "chat": {"id": 999}}}, on_cb)
+    assert edit.call_count == 1 and answer.call_count == 2
+    await tg.aclose()

@@ -48,6 +48,7 @@ class Config:
     anywhere: Anywhere = field(default_factory=Anywhere)
     alerts: Alerts = field(default_factory=Alerts)
     db_path: str = "data/prices.db"
+    passengers: int = 1                 # prices are per person; totals shown for N people
 
     # from .env
     travelpayouts_token: str = ""
@@ -105,6 +106,7 @@ def load_config(config_path: str | Path = "config.yaml", env_path: str | Path = 
         anywhere=Anywhere(**(raw.get("anywhere") or {})),
         alerts=Alerts(**(raw.get("alerts") or {})),
         db_path=raw.get("db_path", "data/prices.db"),
+        passengers=int(raw.get("passengers", 1) or 1),
         travelpayouts_token=os.environ.get("TRAVELPAYOUTS_TOKEN", ""),
         travelpayouts_marker=os.environ.get("TRAVELPAYOUTS_MARKER", ""),
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),

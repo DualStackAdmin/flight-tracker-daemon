@@ -1,6 +1,6 @@
 [project]
 name = "flight-tracker-daemon"
-version = "1.0.0"
+version = "1.1.0"
 description = "Self-hosted cheap flight tracker that runs 24/7 on Linux and sends Telegram alerts"
 readme = "README.md"
 license = { text = "MIT" }

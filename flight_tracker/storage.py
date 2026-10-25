@@ -77,6 +77,15 @@ class Storage:
             (cutoff,),
         ).fetchall()
 
+    def daily_min(self, route_key: str, days: int = 30) -> list[sqlite3.Row]:
+        """Lowest price per day for a route (for the price chart)."""
+        cutoff = time.time() - days * 86400
+        return self.db.execute(
+            "SELECT date(seen_at, 'unixepoch') AS day, MIN(price) AS price, MAX(currency) AS currency"
+            " FROM prices WHERE route_key=? AND seen_at >= ? GROUP BY day ORDER BY day",
+            (route_key, cutoff),
+        ).fetchall()
+
     def prune(self, keep_days: int = 90) -> None:
         cutoff = time.time() - keep_days * 86400
         self.db.execute("DELETE FROM prices WHERE seen_at < ?", (cutoff,))

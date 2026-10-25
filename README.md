@@ -20,7 +20,12 @@ Works from **any city in the world**. Set your departure airport in one line of 
   - the same deal is never sent twice;
   - a per-route cooldown stops spam.
 - ☀️ **Daily digest**: the cheapest fares, every morning at a time you choose.
-- 🤖 **Telegram commands**: `/top`, `/scan`, `/status`, `/routes`, `/help`.
+- 🔘 **Inline buttons** under every alert: `[✈️ Open ticket]` `[🔕 Mute IST]` `[📊 Price chart]`. Mute a destination you don't care about with one tap.
+- 🏖 **Weekend getaways**: `/weekend` finds Friday-evening → Sunday round trips, so you can travel without using vacation days.
+- ⚙️ **Live configuration from Telegram**: `/addroute PAR 150`, `/removeroute PAR`, `/setlimit IST 120`. No SSH, no restart.
+- 👨‍👩‍👧 **Family mode**: `/family 3` adds the total price for 3 passengers to every alert.
+- 🎒 **Baggage hint**: flags low-cost airlines whose cheapest fares usually include hand luggage only.
+- 🤖 **Telegram command menu** registered automatically (`/top`, `/weekend`, `/routes`, ...).
 - 🗄 **Price history** stored in SQLite.
 - 🛡 **Production-ready on Ubuntu**:
   - one-command installer and a hardened systemd service;
@@ -31,15 +36,37 @@ Works from **any city in the world**. Set your departure airport in one line of 
 ## Example alert
 
 ```
-✈️ Baku → Istanbul — 85 USD (one way)
+✈️ Baku → Istanbul — 43 USD (one way)
+👨‍👩‍👧 3 passengers: 129 USD total
 📍 From: 🇦🇿 Baku, Azerbaijan · Heydar Aliyev International Airport (GYD)
 📍 To: 🇹🇷 Istanbul, Turkiye · Sabiha Gokcen International Airport (SAW)
-🛫 10 Dec 2026, 05:30 · 1 stop
-🏷 Pegasus (PC) 411
+🛫 10 Dec 2026, 05:30 · direct
+🏷 Wizz Air (W6) 5612
+🎒 Low-cost airline: cheapest fare is usually hand luggage only, check bag price
 📉 at or below target (≤ 200)
-🔗 Open ticket
 Cached price: confirm on the site before buying.
+[✈️ Open ticket]  [🔕 Mute IST]  [📊 Price chart]
 ```
+
+## Telegram commands
+
+| Command | What it does |
+|---|---|
+| `/top` | Cheapest fares from the last 48 hours |
+| `/weekend [max_price]` | Friday after 15:00 → Sunday round trips |
+| `/scan` | Run a scan now |
+| `/routes` | Watched routes, limits, passengers, muted list |
+| `/addroute PAR [150] [rt 4-10] [direct]` | Watch a new destination (optional target price, round trip with stay length, direct only) |
+| `/removeroute PAR` | Stop watching a destination |
+| `/setlimit 150` / `/setlimit IST 150` | Change the "anywhere" target / one route's target |
+| `/family 3` | Show totals for 3 passengers (`/family 1` to reset) |
+| `/mute IST` / `/unmute IST` / `/muted` | Manage the mute list |
+| `/chart IST` | Lowest price per day, last 30 days |
+| `/status` | Service status |
+
+Changes made from Telegram are stored in the database on top of `config.yaml` and survive restarts.
+
+> **About baggage:** the flight-price API does not return baggage allowances. The 🎒/🧳 line is a hint based on the airline (low-cost vs full-service). Always check the fare conditions before buying.
 
 ## How it works
 
@@ -132,6 +159,7 @@ The bot says **🚀 Flight Tracker started**. Send `/scan` to run a scan right a
 | `anywhere.enabled`, `anywhere.max_price` | Cheapest fares to any destination |
 | `alerts.drop_percent` | Alert when the fare is this % below the 30-day low |
 | `alerts.cooldown_hours` | Minimum time between alerts for one route |
+| `passengers` | Default number of passengers for totals (also `/family`) |
 
 See [`config.example.yaml`](config.example.yaml) for a full example.
 
@@ -161,7 +189,9 @@ flight_tracker/
   config.py        # config.yaml + .env loading
   travelpayouts.py # API client (retries, 429/5xx backoff)
   storage.py       # SQLite price history
-  alerts.py        # alert rules + message formatting
+  alerts.py        # alert rules, message formatting, buttons, charts
+  settings.py      # live settings changed from Telegram
+  locations.py     # city / country / airport names
   scanner.py       # scan cycle
   telegram.py      # send messages + commands (long polling)
   main.py          # service, daily digest, CLI
@@ -171,9 +201,11 @@ tests/             # tests with a mocked API
 
 ## Roadmap
 
-- [ ] Manage routes from Telegram (`/add IST 150`, `/remove IST`)
-- [ ] Price history charts sent as images
-- [ ] Weekend-only and date-range filters
+- [x] Manage routes from Telegram
+- [x] Price history charts
+- [x] Weekend getaways
+- [ ] Date-range filters
+- [ ] Real baggage data from a booking API
 - [ ] Docker image
 - [ ] Extra data sources
 

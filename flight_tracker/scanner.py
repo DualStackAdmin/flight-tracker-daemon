@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from .alerts import decide, format_offer
+from .alerts import decide, format_offer, is_weekend_trip, offer_buttons
 from .config import Config, Route
 from .storage import Storage
 from .travelpayouts import ApiError, Offer, TravelpayoutsClient
@@ -39,16 +39,32 @@ class ScanResult:
 
 class Scanner:
     def __init__(self, cfg: Config, api: TravelpayoutsClient, storage: Storage,
-                 notify, request_pause: float = 0.5, locations=None):
+                 notify, request_pause: float = 0.5, locations=None, settings=None):
         self.cfg = cfg
         self.api = api
         self.storage = storage
-        self.notify = notify            # async def notify(text: str)
+        self.notify = notify            # async def notify(text: str, buttons=None)
+        self.settings = settings        # optional live Settings (Telegram-managed)
         self.locations = locations      # optional Locations for city/country names
         self.pause = request_pause
         self._lock = asyncio.Lock()
         self.last_run: float | None = None
         self.last_result: ScanResult | None = None
+
+    # ---------- live settings (fall back to config.yaml) ----------
+    def _routes(self) -> list[Route]:
+        routes = self.settings.routes() if self.settings else list(self.cfg.routes)
+        muted = self._muted()
+        return [r for r in routes if r.destination not in muted]
+
+    def _muted(self) -> set[str]:
+        return self.settings.muted() if self.settings else set()
+
+    def _anywhere_max(self) -> float | None:
+        return self.settings.anywhere_max_price if self.settings else self.cfg.anywhere.max_price
+
+    def _passengers(self) -> int:
+        return self.settings.passengers if self.settings else max(1, self.cfg.passengers)
 
     async def _route_offers(self, route: Route, months: list[date], today: date) -> list[Offer]:
         offers: list[Offer] = []
@@ -82,7 +98,9 @@ class Scanner:
         self.storage.record(route_key, offer, now=now)
         res.best[route_key] = offer
         if d.send:
-            await self.notify(format_offer(offer, d.reasons, self.locations))
+            text = format_offer(offer, d.reasons, self.locations,
+                                passengers=self._passengers(), with_link=False)
+            await self.notify(text, offer_buttons(offer, route_key))
             self.storage.mark_alert(route_key, offer, now=now)
             res.alerts += 1
 
@@ -95,7 +113,9 @@ class Scanner:
             months = month_starts(today, self.cfg.months_ahead)
             res = ScanResult()
 
-            for route in self.cfg.routes:
+            routes = self._routes()
+            muted = self._muted()
+            for route in routes:
                 key = f"{self.cfg.origin}-{route.destination}-{route.kind}"
                 try:
                     offers = await self._route_offers(route, months, today)
@@ -111,7 +131,7 @@ class Scanner:
                     log.info("%s: no offers found", key)
 
             if self.cfg.anywhere.enabled:
-                explicit = {r.destination for r in self.cfg.routes}
+                explicit = {r.destination for r in routes} | muted
                 by_dest: dict[str, Offer] = {}
                 for m in months:
                     try:
@@ -131,10 +151,34 @@ class Scanner:
                 for dest, o in by_dest.items():
                     res.checked += 1
                     await self._handle(f"{self.cfg.origin}-{dest}-any", o,
-                                       self.cfg.anywhere.max_price, res, now)
+                                       self._anywhere_max(), res, now)
 
             self.last_run = now
             self.last_result = res
             log.info("Scan finished: %d routes, %d alerts, %d errors",
                      res.checked, res.alerts, len(res.errors))
             return res
+
+    async def weekend_deals(self, today: date | None = None, depart_after_hour: int = 15,
+                            max_price: float | None = None, top: int = 10) -> list[Offer]:
+        """Cheapest Friday-evening -> Sunday round trips, one per destination."""
+        today = today or date.today()
+        muted = self._muted()
+        best: dict[str, Offer] = {}
+        for m in month_starts(today, self.cfg.months_ahead):
+            try:
+                offers = await self.api.round_trips_anywhere(self.cfg.origin, m)
+            except ApiError as e:
+                log.error("weekend %s: %s", m, e)
+                continue
+            await asyncio.sleep(self.pause)
+            for o in offers:
+                if o.destination in muted or not is_weekend_trip(o, depart_after_hour):
+                    continue
+                if datetime.fromisoformat(o.departure_at).date() < today:
+                    continue
+                if max_price is not None and o.price > max_price:
+                    continue
+                if o.destination not in best or o.price < best[o.destination].price:
+                    best[o.destination] = o
+        return sorted(best.values(), key=lambda o: o.price)[:top]

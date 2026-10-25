@@ -160,3 +160,15 @@ class TravelpayoutsClient:
         }
         rows = await self._get("/aviasales/v3/prices_for_dates", params)
         return [self._to_offer(r) for r in rows if r.get("price")]
+
+    async def round_trips_anywhere(self, origin: str, month: date, limit: int = 1000) -> list[Offer]:
+        """Round-trip fares from origin to any destination departing in `month` (for /weekend)."""
+        params = {
+            "origin": origin,
+            "departure_at": month.strftime("%Y-%m"),
+            "one_way": "false",
+            "sorting": "price",
+            "limit": limit,
+        }
+        rows = await self._get("/aviasales/v3/prices_for_dates", params)
+        return [self._to_offer(r) for r in rows if r.get("price") and r.get("return_at")]
