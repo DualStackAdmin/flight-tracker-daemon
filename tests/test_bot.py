@@ -381,7 +381,8 @@ def test_baggage_hint_and_family_total():
 def test_offer_buttons_shape_and_callback_size():
     o = offer(85)
     rows = offer_buttons(o, "BAK-IST-ow")
-    assert rows[0][0] == {"text": "✈️ Open ticket", "url": "https://x"}
+    assert rows[0][0] == {"text": "✈️ Open ticket",
+                          "url": "https://www.aviasales.com/search/BAK0512IST1"}
     datas = [b["callback_data"] for b in rows[1]]
     assert datas == ["mute:IST", "chart:BAK-IST-ow"]
     assert all(len(d.encode()) <= 64 for d in datas)
@@ -501,7 +502,8 @@ async def test_app_buttons(app):
     msg = {"reply_markup": {"inline_keyboard": offer_buttons(offer(85), "BAK-IST-ow")}}
     toast, reply, kb = await app.handle_callback(1, "mute:IST", msg)
     assert toast == "🔕 IST muted" and reply is None and app.settings.muted() == {"IST"}
-    assert kb[0][0]["url"] == "https://x" and kb[1][0]["callback_data"] == "unmute:IST"
+    assert kb[0][0]["url"].startswith("https://www.aviasales.com/search/BAK0512IST1")
+    assert kb[1][0]["callback_data"] == "unmute:IST"
     assert kb[1][1]["callback_data"] == "chart:BAK-IST-ow"
     toast, _, kb = await app.handle_callback(1, "unmute:IST", {"reply_markup": {"inline_keyboard": kb}})
     assert app.settings.muted() == set() and kb[1][0]["callback_data"] == "mute:IST"
@@ -795,3 +797,47 @@ async def test_app_alt_and_holidays_commands(app):
 async def test_app_guide_button(app):
     toast, reply, kb = await app.handle_callback(1, "guide", {})
     assert toast == "📘" and "Welcome to Flight Tracker" in reply and kb is None
+
+
+
+# ---------- affiliate ticket link ----------
+from flight_tracker.alerts import affiliate_link  # noqa: E402
+
+
+def test_affiliate_link():
+    assert affiliate_link("BAK", "IST", "2026-12-10", marker="123456") == \
+        "https://www.aviasales.com/search/BAK1012IST1?marker=123456"
+    assert affiliate_link("bak", "dxb", "2026-12-10T05:30:00+04:00", "2027-01-07T09:00:00+04:00",
+                          marker="777") == "https://www.aviasales.com/search/BAK1012DXB07011?marker=777"
+    assert affiliate_link("BAK", "IST", "2026-12-10") == "https://www.aviasales.com/search/BAK1012IST1"
+    assert affiliate_link("BAK", "IST", "10.12.2026", marker="1") is None       # bad date
+    assert affiliate_link("BAK", "IST", "", marker="1") is None
+    assert affiliate_link("BAK", "IST", "2026-12-10", "garbage") is None
+    assert affiliate_link("BAK", "IST", "2026-12-10", marker="a b&c") == \
+        "https://www.aviasales.com/search/BAK1012IST1?marker=a%20b%26c"
+
+
+def test_ticket_button_uses_affiliate_link_with_fallback():
+    o = offer(85)
+    assert offer_buttons(o, "BAK-IST-ow", "123456")[0][0]["url"] == \
+        "https://www.aviasales.com/search/BAK0512IST1?marker=123456"
+    bad = Offer("BAK", "IST", "not-a-date", None, 85, "USD", "J2", "61", 0, None, 1, "https://api-link")
+    assert offer_buttons(bad, "BAK-IST-ow", "123456")[0][0]["url"] == "https://api-link"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scanner_alert_button_carries_marker(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    respx.get(API).mock(return_value=httpx.Response(200, json={"success": True, "data": [
+        row("IST", 50, "2026-12-03T08:00:00+04:00")]}))
+    cfg = Config(routes=[Route("IST", max_price=100)], months_ahead=1, travelpayouts_marker="999")
+    sent = []
+
+    async def notify(t, buttons=None):
+        sent.append(buttons)
+
+    api = TravelpayoutsClient("tok")
+    await Scanner(cfg, api, Storage(":memory:"), notify).run_once(today=date(2026, 11, 15))
+    await api.aclose()
+    assert sent[0][0][0]["url"] == "https://www.aviasales.com/search/BAK0312IST1?marker=999"

@@ -164,7 +164,7 @@ class Scanner:
             extra = await self.enricher.lines(offer) if self.enricher else []
             text = format_offer(offer, d.reasons, self.locations,
                                 passengers=self._passengers(), with_link=False, extra=extra)
-            await self.notify(text, offer_buttons(offer, route_key))
+            await self.notify(text, offer_buttons(offer, route_key, self.cfg.travelpayouts_marker))
             self.storage.mark_alert(route_key, offer, now=now)
             res.alerts += 1
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import quote
 
 from .locations import Locations
 from .travelpayouts import Offer
@@ -133,9 +134,43 @@ def format_offer(offer: Offer, reasons: list[str] | None = None,
 
 
 # ---------- inline buttons ----------
-def offer_buttons(offer: Offer, route_key: str) -> list[list[dict]]:
-    """Inline keyboard under an alert. callback_data must stay under 64 bytes."""
-    return alert_buttons(offer.link, offer.destination, route_key)
+AVIASALES_SEARCH = "https://www.aviasales.com/search/"
+
+
+def _ddmm(value: str) -> str:
+    """'2026-12-10' or '2026-12-10T05:30:00+04:00' -> '1012'. Raises ValueError if invalid."""
+    return datetime.strptime(str(value)[:10], "%Y-%m-%d").strftime("%d%m")
+
+
+def affiliate_link(origin: str, destination: str, flight_date: str,
+                   return_date: str | None = None, marker: str = "",
+                   passengers: int = 1) -> str | None:
+    """Aviasales search link with your Travelpayouts marker.
+
+    One way:    https://www.aviasales.com/search/BAK1012IST1?marker=123
+    Round trip: https://www.aviasales.com/search/BAK1012IST17121?marker=123
+    Returns None if a date cannot be parsed (the caller then keeps the API link).
+    """
+    try:
+        dep = _ddmm(flight_date)
+        ret = _ddmm(return_date) if return_date else ""
+    except (ValueError, TypeError):
+        return None
+    if not (origin and destination):
+        return None
+    url = f"{AVIASALES_SEARCH}{origin.upper()}{dep}{destination.upper()}{ret}{max(1, int(passengers))}"
+    if marker:
+        url += f"?marker={quote(str(marker), safe='')}"
+    return url
+
+
+def offer_buttons(offer: Offer, route_key: str, marker: str = "") -> list[list[dict]]:
+    """Inline keyboard under an alert. callback_data must stay under 64 bytes.
+    The ticket button uses the affiliate search link; if that cannot be built,
+    it falls back to the link returned by the API."""
+    link = affiliate_link(offer.origin, offer.destination, offer.departure_at,
+                          offer.return_at, marker) or offer.link
+    return alert_buttons(link, offer.destination, route_key)
 
 
 def alert_buttons(link: str | None, dest: str, route_key: str | None) -> list[list[dict]]:
