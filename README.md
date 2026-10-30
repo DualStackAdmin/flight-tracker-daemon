@@ -245,6 +245,17 @@ Contributions are welcome. Open an [issue](https://github.com/DualStackAdmin/fli
 
 If this project saved you money on a ticket, give it a ⭐
 
+## Affiliate links
+
+Ticket links include the project author's [Travelpayouts](https://www.travelpayouts.com) affiliate marker by default. If you buy a ticket through such a link, the price for you is exactly the same; the booking site pays a small commission that supports this project. Thank you!
+
+To use your own marker or turn it off, add one line to `.env`:
+
+```
+TRAVELPAYOUTS_MARKER=your_marker   # your own Travelpayouts marker
+TRAVELPAYOUTS_MARKER=off           # no marker at all
+```
+
 ## Disclaimer
 
 This project is not affiliated with Aviasales, Travelpayouts, Telegram or any airline. Prices are informational and may differ from the final booking price. Visa, holiday, baggage and weather lines are hints, not official information.

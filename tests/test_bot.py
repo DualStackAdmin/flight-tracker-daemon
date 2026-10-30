@@ -841,3 +841,24 @@ async def test_scanner_alert_button_carries_marker(monkeypatch):
     await Scanner(cfg, api, Storage(":memory:"), notify).run_once(today=date(2026, 11, 15))
     await api.aclose()
     assert sent[0][0][0]["url"] == "https://www.aviasales.com/search/BAK0312IST1?marker=999"
+
+
+
+# ---------- default affiliate marker ----------
+from flight_tracker.config import DEFAULT_MARKER, resolve_marker  # noqa: E402
+
+
+def test_marker_default_override_and_off(tmp_path, monkeypatch):
+    assert DEFAULT_MARKER == "794979"
+    assert resolve_marker(None) == resolve_marker("") == resolve_marker("  ") == "794979"
+    assert resolve_marker("12345") == "12345"
+    assert resolve_marker("off") == resolve_marker("NONE") == ""
+    (tmp_path / "c.yaml").write_text("origin: BAK\n")
+    monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
+    (tmp_path / ".env").write_text("TRAVELPAYOUTS_TOKEN=x\n")                  # no marker line
+    assert load_config(tmp_path / "c.yaml", tmp_path / ".env").travelpayouts_marker == "794979"
+    monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
+    (tmp_path / ".env").write_text("TRAVELPAYOUTS_MARKER=\n")                  # empty line, like an old .env
+    assert load_config(tmp_path / "c.yaml", tmp_path / ".env").travelpayouts_marker == "794979"
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "555")
+    assert load_config(tmp_path / "c.yaml", tmp_path / "none.env").travelpayouts_marker == "555"

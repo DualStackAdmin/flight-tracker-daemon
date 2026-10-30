@@ -7,6 +7,22 @@ from pathlib import Path
 
 import yaml
 
+# Travelpayouts affiliate marker of the project author (Ulvi Guluzada).
+# Ticket links carry it by default, which supports the project at no extra cost
+# for the buyer. Use your own with TRAVELPAYOUTS_MARKER=12345 in .env,
+# or turn it off with TRAVELPAYOUTS_MARKER=off.
+DEFAULT_MARKER = "794979"
+
+
+def resolve_marker(value: str | None) -> str:
+    """Empty or missing -> author's default marker; 'off'/'none' -> no marker."""
+    value = (value or "").strip()
+    if not value:
+        return DEFAULT_MARKER
+    if value.lower() in ("off", "none", "false", "0"):
+        return ""
+    return value
+
 
 @dataclass
 class Route:
@@ -132,7 +148,7 @@ def load_config(config_path: str | Path = "config.yaml", env_path: str | Path = 
         alt_flex_days=int(raw.get("alt_flex_days", 2)),
         alt_min_saving_percent=float(raw.get("alt_min_saving_percent", 25)),
         travelpayouts_token=os.environ.get("TRAVELPAYOUTS_TOKEN", ""),
-        travelpayouts_marker=os.environ.get("TRAVELPAYOUTS_MARKER", ""),
+        travelpayouts_marker=resolve_marker(os.environ.get("TRAVELPAYOUTS_MARKER")),
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_ids=[
             int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x
